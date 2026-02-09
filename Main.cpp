@@ -1,15 +1,17 @@
 // developed by dl6822
 # include <array>
-# include <cstddef>
+# include <cmath>
 # include <memory>
 # include <string>
-# include <utility>
 # include <vector>
+# include <cstddef>
+# include <utility>
 # include <functional>
 # include <unordered_map>
 # define NOMINMAX
 # define WIN32_LEAN_AND_MEAN
 # include <windows.h>
+# include <windowsx.h>
 # pragma comment(lib, "opengl32.lib")
 # pragma comment(lib, "glu32.lib")
 # include <gl/GL.h>
@@ -22,7 +24,11 @@ struct button {
 };
 struct drawable {
 	int state = 0;
-	virtual void draw() const = 0;
+	virtual void left_mouse_button_down(float, float) {}
+	virtual void left_mouse_button_up(float, float) {}
+	virtual void left_clicked(float, float) {}
+	virtual void right_clicked(float, float) {}
+	virtual void draw(float, float, bool) const = 0;
 	virtual ~drawable() = default;
 };
 struct brush_stroke : drawable {
@@ -30,7 +36,50 @@ struct brush_stroke : drawable {
 	std::vector<float> y;
 	float size = 1.0f;
 	COLORREF color = RGB(0, 0, 0);
-	void draw() const override {}
+	void left_mouse_button_down(float point_x, float point_y) override {
+		state = 1;
+		if (!x.empty() && !y.empty()) {
+			float last_x = x.back();
+			float last_y = y.back();
+			float dx = point_x - last_x;
+			float dy = point_y - last_y;
+			float distance = std::sqrt(dx * dx + dy * dy);
+			float step = size * 0.5f;
+			if (step < 1.0f) {
+				step = 1.0f;
+			}
+			if (distance > step) {
+				int count = static_cast<int>(distance / step);
+				for (int index = 1; index < count; index += 1) {
+					float t = static_cast<float>(index) / static_cast<float>(count);
+					x.push_back(last_x + dx * t);
+					y.push_back(last_y + dy * t);
+				}
+			}
+		}
+		x.push_back(point_x);
+		y.push_back(point_y);
+	}
+	void left_mouse_button_up(float, float) override {
+		state = 0;
+	}
+	void draw(float, float, bool) const override {
+		if (x.empty() || y.empty()) {
+			return;
+		}
+		glPointSize(size);
+		glColor3ub(
+			static_cast<GLubyte>(GetRValue(color)),
+			static_cast<GLubyte>(GetGValue(color)),
+			static_cast<GLubyte>(GetBValue(color))
+		);
+		glBegin(GL_POINTS);
+		for (std::size_t index = 0;
+			index < x.size() && index < y.size(); index += 1) {
+			glVertex2f(x[index], y[index]);
+		}
+		glEnd();
+	}
 };
 struct line_stroke : drawable {
 	float x1 = 0.0f;
@@ -39,7 +88,92 @@ struct line_stroke : drawable {
 	float y2 = 0.0f;
 	float width = 1.0f;
 	COLORREF color = RGB(0, 0, 0);
-	void draw() const override {}
+	void left_mouse_button_down(float point_x, float point_y) override {
+		if (state == 0) {
+			x1 = point_x;
+			y1 = point_y;
+			state = 1;
+		}
+	}
+	void left_mouse_button_up(float point_x, float point_y) override {
+		if (state == 1) {
+			x2 = point_x;
+			y2 = point_y;
+			state = 0;
+		}
+	}
+	void draw(float cursor_x, float cursor_y, bool cursor_valid) const override {
+		if (state == 0) {
+			if (x1 == x2 && y1 == y2) {
+				return;
+			}
+		} else if (!cursor_valid) {
+			return;
+		}
+		float end_x = (state == 0) ? x2 : cursor_x;
+		float end_y = (state == 0) ? y2 : cursor_y;
+		glLineWidth(width);
+		glColor3ub(
+			static_cast<GLubyte>(GetRValue(color)),
+			static_cast<GLubyte>(GetGValue(color)),
+			static_cast<GLubyte>(GetBValue(color))
+		);
+		glBegin(GL_LINES);
+		glVertex2f(x1, y1);
+		glVertex2f(end_x, end_y);
+		glEnd();
+	}
+};
+struct quad_stroke : drawable {
+	float x1 = 0.0f;
+	float y1 = 0.0f;
+	float x2 = 0.0f;
+	float y2 = 0.0f;
+	float width = 1.0f;
+	COLORREF color = RGB(0, 0, 0);
+	void left_mouse_button_down(float point_x, float point_y) override {
+		if (state == 0) {
+			x1 = point_x;
+			y1 = point_y;
+			state = 1;
+		}
+	}
+	void left_mouse_button_up(float point_x, float point_y) override {
+		if (state == 1) {
+			x2 = point_x;
+			y2 = point_y;
+			state = 0;
+		}
+	}
+	void draw(float cursor_x, float cursor_y, bool cursor_valid) const override {
+		float end_x = x2;
+		float end_y = y2;
+		if (state != 0) {
+			if (!cursor_valid) {
+				return;
+			}
+			end_x = cursor_x;
+			end_y = cursor_y;
+		}
+		glColor3ub(
+			static_cast<GLubyte>(GetRValue(color)),
+			static_cast<GLubyte>(GetGValue(color)),
+			static_cast<GLubyte>(GetBValue(color))
+		);
+		if (state == 0) {
+			if (x1 == x2 && y1 == y2) {
+				return;
+			}
+			glBegin(GL_QUADS);
+		} else {
+			glBegin(GL_LINE_LOOP);
+		}
+		glVertex2f(x1, y1);
+		glVertex2f(end_x, y1);
+		glVertex2f(end_x, end_y);
+		glVertex2f(x1, end_y);
+		glEnd();
+	}
 };
 struct triangle_stroke : drawable {
 	float x1 = 0.0f;
@@ -50,23 +184,111 @@ struct triangle_stroke : drawable {
 	float y3 = 0.0f;
 	float width = 1.0f;
 	COLORREF color = RGB(0, 0, 0);
-	void draw() const override {}
-};
-struct quad_stroke : drawable {
-	float x1 = 0.0f;
-	float y1 = 0.0f;
-	float x2 = 0.0f;
-	float y2 = 0.0f;
-	float width = 1.0f;
-	COLORREF color = RGB(0, 0, 0);
-	void draw() const override {}
+	void left_clicked(float point_x, float point_y) override {
+		if (state == 0) {
+			x1 = point_x;
+			y1 = point_y;
+			state = 1;
+			return;
+		}
+		if (state == 1) {
+			x2 = point_x;
+			y2 = point_y;
+			state = 2;
+			return;
+		}
+		x3 = point_x;
+		y3 = point_y;
+		state = 0;
+	}
+	void draw(float cursor_x, float cursor_y, bool cursor_valid) const override {
+		if (state == 0) {
+			if (x1 == x2 && y1 == y2) {
+				return;
+			}
+			glColor3ub(
+				static_cast<GLubyte>(GetRValue(color)),
+				static_cast<GLubyte>(GetGValue(color)),
+				static_cast<GLubyte>(GetBValue(color))
+			);
+			glBegin(GL_TRIANGLES);
+			glVertex2f(x1, y1);
+			glVertex2f(x2, y2);
+			glVertex2f(x3, y3);
+			glEnd();
+			return;
+		}
+		if (!cursor_valid) {
+			return;
+		}
+		glLineWidth(width);
+		glColor3ub(
+			static_cast<GLubyte>(GetRValue(color)),
+			static_cast<GLubyte>(GetGValue(color)),
+			static_cast<GLubyte>(GetBValue(color))
+		);
+		glBegin(GL_LINE_LOOP);
+		glVertex2f(x1, y1);
+		if (state == 1) {
+			glVertex2f(cursor_x, cursor_y);
+		} else {
+			glVertex2f(x2, y2);
+			glVertex2f(cursor_x, cursor_y);
+		}
+		glEnd();
+	}
 };
 struct polygon_stroke : drawable {
 	std::vector<float> x;
 	std::vector<float> y;
 	float width = 1.0f;
 	COLORREF color = RGB(0, 0, 0);
-	void draw() const override {}
+	void left_clicked(float point_x, float point_y) override {
+		if (state == 0) {
+			state = 1;
+		}
+		x.push_back(point_x);
+		y.push_back(point_y);
+	}
+	void right_clicked(float point_x, float point_y) override {
+		if (state == 0) {
+			return;
+		}
+		x.push_back(point_x);
+		y.push_back(point_y);
+		if (x.size() >= 3 && y.size() >= 3) {
+			state = 0;
+		}
+	}
+	void draw(float cursor_x, float cursor_y, bool cursor_valid) const override {
+		std::size_t count = x.size() < y.size() ? x.size() : y.size();
+		if (count == 0) {
+			return;
+		}
+		glColor3ub(
+			static_cast<GLubyte>(GetRValue(color)),
+			static_cast<GLubyte>(GetGValue(color)),
+			static_cast<GLubyte>(GetBValue(color))
+		);
+		if (state == 0 && count >= 3) {
+			glBegin(GL_POLYGON);
+			for (std::size_t index = 0; index < count; index += 1) {
+				glVertex2f(x[index], y[index]);
+			}
+			glEnd();
+			return;
+		}
+		if (!cursor_valid) {
+			return;
+		}
+		glLineWidth(width);
+		glBegin(GL_LINE_LOOP);
+		for (std::size_t index = 0; index < count; index += 1) {
+			glVertex2f(x[index], y[index]);
+		}
+		glVertex2f(cursor_x, cursor_y);
+		glEnd();
+	}
 };
 struct frame {
 	std::vector<std::unique_ptr<drawable>> drawables = {};
@@ -77,13 +299,13 @@ static const wchar_t *window_title = L"Flash 2026";
 static std::unordered_map<int, button> buttons = {};
 static std::vector<frame> frames(1);
 static const std::array<const wchar_t *, 6> tool_names = {
-	L"Brush", L"Line", L"Triangle", L"Quad", L"Polygon", L"Eraser"
+	L"Brush", L"Line", L"Quad", L"Triangle", L"Polygon", L"Eraser"
 };
 static const std::array<const wchar_t *, 6> tool_hints = {
 	L"Brush Tool: click and drag to paint.",
-	L"Line Tool: click two points.",
+	L"Line Tool: press and release.",
+	L"Quad Tool: press and release.",
 	L"Triangle Tool: click three points.",
-	L"Quad Tool: click two opposite corners.",
 	L"Polygon Tool: click points, right-click to finish.",
 	L"Eraser Tool: click and drag to clear."
 };
@@ -127,10 +349,19 @@ static const std::array<int, 24> color_button_identifiers = {
 };
 static const int undo_button_identifier = 4001;
 static const int redo_button_identifier = 4002;
-static const int hint_button_identifier = 4003;
+static const int clear_button_identifier = 4003;
+static const int hint_button_identifier = 4004;
 static int current_brush_size = 0;
 static int current_line_width = 0;
 static int current_color = 0;
+static bool left_mouse_down = false;
+static float stage_left = 0.0f;
+static float stage_right = 0.0f;
+static float stage_bottom = 0.0f;
+static float stage_top = 0.0f;
+static float cursor_x = 0.0f;
+static float cursor_y = 0.0f;
+static bool cursor_valid = false;
 static HINSTANCE instance_handle = nullptr;
 static HWND window_handle = nullptr;
 static HFONT font_handle = nullptr;
@@ -268,6 +499,7 @@ static LRESULT CALLBACK procedure(
 				if (iterator->second.function) {
 					iterator->second.function();
 				}
+				SetFocus(window_handle);
 				return 0;
 			}
 		}
@@ -393,7 +625,175 @@ static void set_button_enabled(int identifier, bool enabled) {
 	if (iterator != buttons.end()) {
 		EnableWindow(iterator->second.handle, enabled ? TRUE : FALSE);
 		InvalidateRect(iterator->second.handle, nullptr, TRUE);
+		if (!enabled && GetFocus() == iterator->second.handle) {
+			SetFocus(window_handle);
+		}
 	}
+}
+static frame &current_frame() {
+	return frames[0];
+}
+static void update_undo_redo_buttons() {
+	frame &active_frame = current_frame();
+	set_button_enabled(undo_button_identifier, active_frame.current_step >= 0);
+	set_button_enabled(
+		redo_button_identifier,
+		active_frame.current_step + 1 < static_cast<int>(active_frame.drawables.size())
+	);
+	set_button_enabled(clear_button_identifier, !active_frame.drawables.empty());
+}
+static float brush_size_value() {
+	static const float values[] = { 4.0f, 8.0f, 14.0f };
+	return values[current_brush_size];
+}
+static float line_width_value() {
+	return brush_size_value();
+}
+static std::unique_ptr<drawable> create_drawable_for_tool(int tool_index) {
+	if (tool_index == 0) {
+		std::unique_ptr<brush_stroke> stroke = std::make_unique<brush_stroke>();
+		stroke->size = brush_size_value();
+		stroke->color = color_values[static_cast<std::size_t>(current_color)];
+		return stroke;
+	}
+	if (tool_index == 1) {
+		std::unique_ptr<line_stroke> stroke = std::make_unique<line_stroke>();
+		stroke->width = line_width_value();
+		stroke->color = color_values[static_cast<std::size_t>(current_color)];
+		return stroke;
+	}
+	if (tool_index == 2) {
+		std::unique_ptr<quad_stroke> stroke = std::make_unique<quad_stroke>();
+		stroke->width = line_width_value();
+		stroke->color = color_values[static_cast<std::size_t>(current_color)];
+		return stroke;
+	}
+	if (tool_index == 3) {
+		std::unique_ptr<triangle_stroke> stroke = std::make_unique<triangle_stroke>();
+		stroke->width = line_width_value();
+		stroke->color = color_values[static_cast<std::size_t>(current_color)];
+		return stroke;
+	}
+	if (tool_index == 4) {
+		std::unique_ptr<polygon_stroke> stroke = std::make_unique<polygon_stroke>();
+		stroke->width = line_width_value();
+		stroke->color = color_values[static_cast<std::size_t>(current_color)];
+		return stroke;
+	}
+	return {};
+}
+static drawable *current_drawable() {
+	frame &active_frame = current_frame();
+	if (active_frame.current_step < 0) {
+		return nullptr;
+	}
+	if (active_frame.current_step >= static_cast<int>(active_frame.drawables.size())) {
+		return nullptr;
+	}
+	return active_frame.drawables[static_cast<std::size_t>(active_frame.current_step)].get();
+}
+static void add_drawable(std::unique_ptr<drawable> item) {
+	if (!item) {
+		return;
+	}
+	frame &active_frame = current_frame();
+	int keep_count = active_frame.current_step + 1;
+	if (keep_count < static_cast<int>(active_frame.drawables.size())) {
+		active_frame.drawables.erase(
+			active_frame.drawables.begin() + keep_count,
+			active_frame.drawables.end()
+		);
+	}
+	active_frame.drawables.push_back(std::move(item));
+	active_frame.current_step = static_cast<int>(active_frame.drawables.size()) - 1;
+	update_undo_redo_buttons();
+}
+static void undo_action() {
+	frame &active_frame = current_frame();
+	if (active_frame.current_step >= 0) {
+		active_frame.current_step -= 1;
+		update_undo_redo_buttons();
+	}
+}
+static void redo_action() {
+	frame &active_frame = current_frame();
+	if (active_frame.current_step + 1 < static_cast<int>(active_frame.drawables.size())) {
+		active_frame.current_step += 1;
+		update_undo_redo_buttons();
+	}
+}
+static void clear_action() {
+	frame &active_frame = current_frame();
+	active_frame.drawables.clear();
+	active_frame.current_step = -1;
+	update_undo_redo_buttons();
+}
+static void handle_left_mouse_down(float x, float y) {
+	if (current_tool == 3 || current_tool == 4) {
+		return;
+	}
+	drawable *active = current_drawable();
+	if (!active || active->state == 0) {
+		if (x < stage_left || x > stage_right || y < stage_bottom || y > stage_top) {
+			return;
+		}
+		std::unique_ptr<drawable> created = create_drawable_for_tool(current_tool);
+		if (created) {
+			created->left_mouse_button_down(x, y);
+			add_drawable(std::move(created));
+		}
+		return;
+	}
+	active->left_mouse_button_down(x, y);
+}
+static void handle_left_mouse_up(float x, float y) {
+	drawable *active = current_drawable();
+	if (active) {
+		active->left_mouse_button_up(x, y);
+	}
+}
+static void handle_left_clicked(float x, float y) {
+	if (current_tool != 3 && current_tool != 4) {
+		return;
+	}
+	drawable *active = current_drawable();
+	if (!active || active->state == 0) {
+		if (x < stage_left || x > stage_right || y < stage_bottom || y > stage_top) {
+			return;
+		}
+		std::unique_ptr<drawable> created = create_drawable_for_tool(current_tool);
+		if (created) {
+			created->left_clicked(x, y);
+			add_drawable(std::move(created));
+		}
+		return;
+	}
+	active->left_clicked(x, y);
+}
+static void handle_right_clicked(float x, float y) {
+	drawable *active = current_drawable();
+	if (active) {
+		active->right_clicked(x, y);
+	}
+}
+static bool is_opengl_message(const MSG &message) {
+	return message.hwnd == opengl_window_handle;
+}
+static void to_opengl_coordinates(float &x, float &y) {
+	RECT client = RECT();
+	GetClientRect(opengl_window_handle, &client);
+	y = static_cast<float>(client.bottom - client.top) - y;
+}
+static bool handle_key_shortcuts(UINT key) {
+	if (key == 'Z') {
+		undo_action();
+		return true;
+	}
+	if (key == 'X') {
+		redo_action();
+		return true;
+	}
+	return false;
 }
 static std::wstring format_tool_button_text(int index) {
 	std::wstring text = tool_names[static_cast<std::size_t>(index)];
@@ -587,12 +987,21 @@ static void render_frame() {
 	glLoadIdentity();
 	glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT);
+	frame &active_frame = current_frame();
+	for (int index = 0; index <= active_frame.current_step; index += 1) {
+		if (index >= static_cast<int>(active_frame.drawables.size())) {
+			break;
+		}
+		active_frame.drawables[static_cast<std::size_t>(index)]->draw(
+			cursor_x, cursor_y, cursor_valid
+		);
+	}
 	float stage_width = static_cast<float>(client_width) * 0.6f;
 	float stage_height = static_cast<float>(client_height) * 0.6f;
-	float stage_left = (static_cast<float>(client_width) - stage_width) * 0.5f;
-	float stage_bottom = (static_cast<float>(client_height) - stage_height) * 0.5f;
-	float stage_right = stage_left + stage_width;
-	float stage_top = stage_bottom + stage_height;
+	stage_left = (static_cast<float>(client_width) - stage_width) * 0.5f;
+	stage_bottom = (static_cast<float>(client_height) - stage_height) * 0.5f;
+	stage_right = stage_left + stage_width;
+	stage_top = stage_bottom + stage_height;
 	glColor3f(0.1f, 0.1f, 0.1f);
 	glBegin(GL_QUADS);
 	glVertex2f(0.0f, 0.0f);
@@ -646,8 +1055,9 @@ int main() {
 	int top_gap = 5;
 	int undo_x = top_margin;
 	int redo_x = undo_x + button_width + top_gap;
+	int clear_x = redo_x + button_width + top_gap;
 	int about_x = window_width - button_width - top_margin;
-	int hint_x = redo_x + button_width + top_gap;
+	int hint_x = clear_x + button_width + top_gap;
 	int hint_width = about_x - top_gap - hint_x;
 	if (hint_width < button_width) {
 		hint_width = button_width;
@@ -656,14 +1066,27 @@ int main() {
 		undo_button_identifier, L"Undo [Z]", 'Z',
 		undo_x, top_margin,
 		button_width, button_height,
-		[]() {},
+		[]() {
+			undo_action();
+		},
 		true
 	);
 	create_button(
-		redo_button_identifier, L"Redo [Y]", 'Y',
+		redo_button_identifier, L"Redo [X]", 'X',
 		redo_x, top_margin,
 		button_width, button_height,
-		[]() {},
+		[]() {
+			redo_action();
+		},
+		true
+	);
+	create_button(
+		clear_button_identifier, L"Clear [C]", 'C',
+		clear_x, top_margin,
+		button_width, button_height,
+		[]() {
+			clear_action();
+		},
 		true
 	);
 	create_button(
@@ -676,7 +1099,9 @@ int main() {
 	);
 	set_button_enabled(undo_button_identifier, false);
 	set_button_enabled(redo_button_identifier, false);
+	set_button_enabled(clear_button_identifier, true);
 	set_button_enabled(hint_button_identifier, false);
+	update_undo_redo_buttons();
 	int tools_x = 10;
 	for (std::size_t index = 0;
 		index < tool_button_identifiers.size(); index += 1) {
@@ -799,8 +1224,74 @@ int main() {
 			}
 			if (message.message == WM_KEYDOWN) {
 				UINT key = static_cast<UINT>(message.wParam);
-				if (process_button_shortcut(key)) {
+				if (handle_key_shortcuts(key)) {
+					SetFocus(window_handle);
 					continue;
+				}
+				if (process_button_shortcut(key)) {
+					SetFocus(window_handle);
+					continue;
+				}
+			}
+			if (message.message == WM_LBUTTONDOWN) {
+				if (is_opengl_message(message)) {
+					SetCapture(opengl_window_handle);
+					left_mouse_down = true;
+					float x = static_cast<float>(GET_X_LPARAM(message.lParam));
+					float y = static_cast<float>(GET_Y_LPARAM(message.lParam));
+					to_opengl_coordinates(x, y);
+					cursor_x = x;
+					cursor_y = y;
+					cursor_valid = true;
+					handle_left_mouse_down(x, y);
+				}
+			}
+			if (message.message == WM_LBUTTONUP) {
+				if (left_mouse_down) {
+					ReleaseCapture();
+					left_mouse_down = false;
+				}
+				if (is_opengl_message(message)) {
+					float x = static_cast<float>(GET_X_LPARAM(message.lParam));
+					float y = static_cast<float>(GET_Y_LPARAM(message.lParam));
+					to_opengl_coordinates(x, y);
+					cursor_x = x;
+					cursor_y = y;
+					cursor_valid = true;
+					handle_left_mouse_up(x, y);
+					handle_left_clicked(x, y);
+				}
+			}
+			if (message.message == WM_MOUSEMOVE && left_mouse_down) {
+				if (is_opengl_message(message)) {
+					float x = static_cast<float>(GET_X_LPARAM(message.lParam));
+					float y = static_cast<float>(GET_Y_LPARAM(message.lParam));
+					to_opengl_coordinates(x, y);
+					cursor_x = x;
+					cursor_y = y;
+					cursor_valid = true;
+					handle_left_mouse_down(x, y);
+				}
+			}
+			if (message.message == WM_MOUSEMOVE && !left_mouse_down) {
+				if (is_opengl_message(message)) {
+					float x = static_cast<float>(GET_X_LPARAM(message.lParam));
+					float y = static_cast<float>(GET_Y_LPARAM(message.lParam));
+					to_opengl_coordinates(x, y);
+					cursor_x = x;
+					cursor_y = y;
+					cursor_valid = true;
+				}
+			}
+			if (message.message == WM_RBUTTONDOWN) {
+				if (is_opengl_message(message)) {
+					float x = static_cast<float>(GET_X_LPARAM(message.lParam));
+					float y = static_cast<float>(GET_Y_LPARAM(message.lParam));
+					to_opengl_coordinates(x, y);
+					cursor_x = x;
+					cursor_y = y;
+					cursor_valid = true;
+					handle_right_clicked(x, y);
 				}
 			}
 			TranslateMessage(&message);
