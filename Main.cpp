@@ -494,6 +494,7 @@ static const int previous_frame_button_identifier = 5007;
 static const int next_frame_button_identifier = 5008;
 static const int last_frame_button_identifier = 5009;
 static const int frame_label_button_identifier = 5010;
+static const int onion_skin_button_identifier = 5011;
 static const UINT animation_timer_identifier = 1;
 static const UINT animation_timer_interval = 100;
 static int current_brush_size = 0;
@@ -501,6 +502,7 @@ static int current_line_width = 0;
 static int current_color = 0;
 static int current_frame_index = 0;
 static bool is_playing = false;
+static bool onion_skin_enabled = false;
 static bool left_mouse_down = false;
 static float stage_left = 0.0f;
 static float stage_right = 0.0f;
@@ -557,6 +559,9 @@ static LRESULT CALLBACK procedure(
 						selected_button = static_cast<int>(index) == current_line_width;
 						break;
 					}
+				}
+				if (identifier == onion_skin_button_identifier) {
+					selected_button = onion_skin_enabled;
 				}
 				for (std::size_t index = 0;
 					index < color_button_identifiers.size(); index += 1) {
@@ -896,6 +901,12 @@ static void update_frame_label() {
 			+ std::to_wstring(total_frames) + L"  "
 	);
 }
+static void update_onion_skin_button() {
+	update_button_text(
+		onion_skin_button_identifier,
+		L"Onion Skin [O]"
+	);
+}
 static void select_frame(int index) {
 	if (frames.empty()) {
 		frames.push_back(frame());
@@ -979,6 +990,10 @@ static void toggle_playback() {
 	} else {
 		play_animation();
 	}
+}
+static void toggle_onion_skin() {
+	onion_skin_enabled = !onion_skin_enabled;
+	update_onion_skin_button();
 }
 static float brush_size_value() {
 	static const float values[] = {4.0f, 8.0f, 14.0f};
@@ -1359,6 +1374,14 @@ static bool handle_key_shortcuts(UINT key) {
 	if (is_playing) {
 		return false;
 	}
+	if (key == 'O') {
+		toggle_onion_skin();
+		return true;
+	}
+	if (key == 'N') {
+		add_empty_frame();
+		return true;
+	}
 	if (key == 'Z') {
 		undo_action();
 		return true;
@@ -1563,6 +1586,36 @@ static void render_frame() {
 	glClear(GL_COLOR_BUFFER_BIT);
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	float stage_width = static_cast<float>(client_width) * 0.6f;
+	float stage_height = static_cast<float>(client_height) * 0.6f;
+	stage_left = (static_cast<float>(client_width) - stage_width) * 0.5f;
+	stage_bottom = (static_cast<float>(client_height) - stage_height) * 0.5f;
+	stage_right = stage_left + stage_width;
+	stage_top = stage_bottom + stage_height;
+	if (!is_playing && onion_skin_enabled && frames.size() > 1) {
+		int previous_index = current_frame_index - 1;
+		if (previous_index < 0) {
+			previous_index = static_cast<int>(frames.size()) - 1;
+		}
+		frame &previous_frame = frames[static_cast<std::size_t>(previous_index)];
+		for (int index = 0; index <= previous_frame.current_step; index += 1) {
+			if (index >= static_cast<int>(previous_frame.drawables.size())) {
+				break;
+			}
+			drawable *item = previous_frame.drawables[static_cast<std::size_t>(index)].get();
+			if (!item) {
+				continue;
+			}
+			item->draw(cursor_x, cursor_y, cursor_valid);
+		}
+		glColor4f(1.0f, 1.0f, 1.0f, 0.9f);
+		glBegin(GL_QUADS);
+		glVertex2f(stage_left, stage_bottom);
+		glVertex2f(stage_right, stage_bottom);
+		glVertex2f(stage_right, stage_top);
+		glVertex2f(stage_left, stage_top);
+		glEnd();
+	}
 	frame &active_frame = current_frame();
 	for (int index = 0; index <= active_frame.current_step; index += 1) {
 		if (index >= static_cast<int>(active_frame.drawables.size())) {
@@ -1607,12 +1660,6 @@ static void render_frame() {
 		}
 	}
 	glDisable(GL_BLEND);
-	float stage_width = static_cast<float>(client_width) * 0.6f;
-	float stage_height = static_cast<float>(client_height) * 0.6f;
-	stage_left = (static_cast<float>(client_width) - stage_width) * 0.5f;
-	stage_bottom = (static_cast<float>(client_height) - stage_height) * 0.5f;
-	stage_right = stage_left + stage_width;
-	stage_top = stage_bottom + stage_height;
 	glColor3f(0.1f, 0.1f, 0.1f);
 	glBegin(GL_QUADS);
 	glVertex2f(0.0f, 0.0f);
@@ -1737,6 +1784,19 @@ int main() {
 			true
 		);
 	}
+	int onion_y = tools_start_y
+		+ static_cast<int>(tool_button_identifiers.size()) * (button_height + button_gap)
+		+ button_height;
+	create_button(
+		onion_skin_button_identifier, L"Onion Skin [O]", 'O',
+		tools_x, onion_y,
+		button_width, button_height,
+		[]() {
+			toggle_onion_skin();
+		},
+		true
+	);
+	update_onion_skin_button();
 	int sizes_height = (
 		static_cast<int>(brush_size_button_identifiers.size()) * button_height
 		+ static_cast<int>(brush_size_button_identifiers.size() - 1) * button_gap
@@ -1884,7 +1944,7 @@ int main() {
 	);
 	int mid_button_width = (label_width - bottom_gap) / 2;
 	create_button(
-		add_frame_button_identifier, L"Add New Empty Frame", 0,
+		add_frame_button_identifier, L"Add New Empty Frame [N]", 'N',
 		label_x, upper_row_y,
 		mid_button_width, button_height,
 		[]() {
@@ -1892,7 +1952,7 @@ int main() {
 		}
 	);
 	create_button(
-		copy_frame_button_identifier, L"Copy Current Frame As New", 0,
+		copy_frame_button_identifier, L"Copy This Frame As New", 0,
 		label_x + mid_button_width + bottom_gap, upper_row_y,
 		mid_button_width, button_height,
 		[]() {
