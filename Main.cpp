@@ -37,10 +37,36 @@ struct drawable {
 	virtual ~drawable() = default;
 };
 int drawable::next_identifier = 0;
-struct frame;
-struct eraser_stroke;
+struct frame {
+	std::vector<std::unique_ptr<drawable>> drawables = {};
+	int current_step = -1;
+};
+struct eraser_stroke : drawable {
+	float size = 1.0f;
+	std::unordered_map<int, std::unordered_set<int>> erased_points = {};
+	bool has_last = false;
+	float last_x = 0.0f;
+	float last_y = 0.0f;
+	void left_mouse_button_down(float, float) override {
+		state = 1;
+	}
+	void left_mouse_button_up(float, float) override {
+		state = 0;
+		has_last = false;
+	}
+	void draw(float, float, bool) const override {}
+};
 static frame &current_frame();
-static bool brush_point_erased(float point_x, float point_y, int brush_identifier);
+static bool segments_intersect(
+	float ax, float ay, float bx, float by,
+	float cx, float cy, float dx, float dy);
+static void update_undo_redo_buttons();
+static bool point_in_triangle(
+	float point_x, float point_y,
+	float ax, float ay,
+	float bx, float by,
+	float cx, float cy);
+static bool nearly_equal(float a, float b);
 struct brush_stroke : drawable {
 	std::vector<float> x;
 	std::vector<float> y;
@@ -77,6 +103,26 @@ struct brush_stroke : drawable {
 		if (x.empty() || y.empty()) {
 			return;
 		}
+		const frame &active_frame = current_frame();
+		std::unordered_set<int> erased_indices;
+		for (int index = 0; index <= active_frame.current_step; index += 1) {
+			if (index >= static_cast<int>(active_frame.drawables.size())) {
+				break;
+			}
+			const drawable *item = (
+				active_frame.drawables[static_cast<std::size_t>(index)].get()
+			);
+			const eraser_stroke *eraser = dynamic_cast<const eraser_stroke *>(item);
+			if (!eraser) {
+				continue;
+			}
+			std::unordered_map<int, std::unordered_set<int>>::const_iterator hit =
+				eraser->erased_points.find(identifier);
+			if (hit == eraser->erased_points.end()) {
+				continue;
+			}
+			erased_indices.insert(hit->second.begin(), hit->second.end());
+		}
 		glPointSize(size);
 		glColor3ub(
 			static_cast<GLubyte>(GetRValue(color)),
@@ -86,9 +132,10 @@ struct brush_stroke : drawable {
 		glBegin(GL_POINTS);
 		for (std::size_t index = 0;
 			index < x.size() && index < y.size(); index += 1) {
-			if (!brush_point_erased(x[index], y[index], identifier)) {
-				glVertex2f(x[index], y[index]);
+			if (erased_indices.find(static_cast<int>(index)) != erased_indices.end()) {
+				continue;
 			}
+			glVertex2f(x[index], y[index]);
 		}
 		glEnd();
 	}
@@ -115,6 +162,22 @@ struct line_stroke : drawable {
 		}
 	}
 	void draw(float cursor_x, float cursor_y, bool cursor_valid) const override {
+		const frame &active_frame = current_frame();
+		for (int index = 0; index <= active_frame.current_step; index += 1) {
+			if (index >= static_cast<int>(active_frame.drawables.size())) {
+				break;
+			}
+			const drawable *item = (
+				active_frame.drawables[static_cast<std::size_t>(index)].get()
+			);
+			const eraser_stroke *eraser = dynamic_cast<const eraser_stroke *>(item);
+			if (!eraser) {
+				continue;
+			}
+			if (eraser->erased_points.find(identifier) != eraser->erased_points.end()) {
+				return;
+			}
+		}
 		if (state == 0) {
 			if (x1 == x2 && y1 == y2) {
 				return;
@@ -158,6 +221,22 @@ struct quad_stroke : drawable {
 		}
 	}
 	void draw(float cursor_x, float cursor_y, bool cursor_valid) const override {
+		const frame &active_frame = current_frame();
+		for (int index = 0; index <= active_frame.current_step; index += 1) {
+			if (index >= static_cast<int>(active_frame.drawables.size())) {
+				break;
+			}
+			const drawable *item = (
+				active_frame.drawables[static_cast<std::size_t>(index)].get()
+			);
+			const eraser_stroke *eraser = dynamic_cast<const eraser_stroke *>(item);
+			if (!eraser) {
+				continue;
+			}
+			if (eraser->erased_points.find(identifier) != eraser->erased_points.end()) {
+				return;
+			}
+		}
 		float end_x = x2;
 		float end_y = y2;
 		if (state != 0) {
@@ -214,6 +293,22 @@ struct triangle_stroke : drawable {
 		state = 0;
 	}
 	void draw(float cursor_x, float cursor_y, bool cursor_valid) const override {
+		const frame &active_frame = current_frame();
+		for (int index = 0; index <= active_frame.current_step; index += 1) {
+			if (index >= static_cast<int>(active_frame.drawables.size())) {
+				break;
+			}
+			const drawable *item = (
+				active_frame.drawables[static_cast<std::size_t>(index)].get()
+			);
+			const eraser_stroke *eraser = dynamic_cast<const eraser_stroke *>(item);
+			if (!eraser) {
+				continue;
+			}
+			if (eraser->erased_points.find(identifier) != eraser->erased_points.end()) {
+				return;
+			}
+		}
 		if (state == 0) {
 			if (x1 == x2 && y1 == y2) {
 				return;
@@ -352,6 +447,22 @@ struct polygon_stroke : drawable {
 		if (count == 0) {
 			return;
 		}
+		const frame &active_frame = current_frame();
+		for (int index = 0; index <= active_frame.current_step; index += 1) {
+			if (index >= static_cast<int>(active_frame.drawables.size())) {
+				break;
+			}
+			const drawable *item = (
+				active_frame.drawables[static_cast<std::size_t>(index)].get()
+			);
+			const eraser_stroke *eraser = dynamic_cast<const eraser_stroke *>(item);
+			if (!eraser) {
+				continue;
+			}
+			if (eraser->erased_points.find(identifier) != eraser->erased_points.end()) {
+				return;
+			}
+		}
 		if (state == 0) {
 			cursor_valid = false;
 		}
@@ -389,46 +500,6 @@ struct polygon_stroke : drawable {
 		glEnd();
 	}
 };
-struct eraser_stroke : drawable {
-	std::vector<float> x;
-	std::vector<float> y;
-	float size = 1.0f;
-	std::unordered_set<int> erased = {};
-	std::unordered_set<int> affected_brushes = {};
-	void left_mouse_button_down(float point_x, float point_y) override {
-		state = 1;
-		if (!x.empty() && !y.empty()) {
-			float last_x = x.back();
-			float last_y = y.back();
-			float dx = point_x - last_x;
-			float dy = point_y - last_y;
-			float distance = std::sqrt(dx * dx + dy * dy);
-			float step = size * 0.5f;
-			if (step < 1.0f) {
-				step = 1.0f;
-			}
-			if (distance > step) {
-				int count = static_cast<int>(distance / step);
-				for (int index = 1; index < count; index += 1) {
-					float t = static_cast<float>(index) / static_cast<float>(count);
-					x.push_back(last_x + dx * t);
-					y.push_back(last_y + dy * t);
-				}
-			}
-		}
-		x.push_back(point_x);
-		y.push_back(point_y);
-	}
-	void left_mouse_button_up(float, float) override {
-		state = 0;
-	}
-	void draw(float, float, bool) const override {}
-};
-struct frame {
-	std::vector<std::unique_ptr<drawable>> drawables = {};
-	int current_step = -1;
-};
-static void apply_eraser_at_point(eraser_stroke &eraser, float point_x, float point_y);
 static const wchar_t *window_class_name = L"Flash Window Class";
 static const wchar_t *window_title = L"Flash 2026";
 static std::unordered_map<int, button> buttons = {};
@@ -809,66 +880,231 @@ static void set_buttons_enabled_for_playback(bool enabled) {
 static frame &current_frame() {
 	return frames[static_cast<std::size_t>(current_frame_index)];
 }
-static float distance_point_to_segment(
-	float point_x, float point_y, float start_x, float start_y, float end_x, float end_y) {
+static float cross_product(
+	float start_x, float start_y, float end_x, float end_y, float point_x, float point_y) {
 	float abx = end_x - start_x;
 	float aby = end_y - start_y;
-	float apx = point_x - start_x;
-	float apy = point_y - start_y;
-	float ab_len_sq = abx * abx + aby * aby;
-	float t = 0.0f;
-	if (ab_len_sq > 0.0f) {
-		t = (apx * abx + apy * aby) / ab_len_sq;
-		if (t < 0.0f) {
-			t = 0.0f;
-		} else if (t > 1.0f) {
-			t = 1.0f;
-		}
-	}
-	float cx = start_x + abx * t;
-	float cy = start_y + aby * t;
-	float dx = point_x - cx;
-	float dy = point_y - cy;
-	return std::sqrt(dx * dx + dy * dy);
+	float acx = point_x - start_x;
+	float acy = point_y - start_y;
+	return abx * acy - aby * acx;
 }
-static bool brush_point_erased(float point_x, float point_y, int brush_identifier) {
+static bool nearly_equal(float a, float b) {
+	float diff = a - b;
+	if (diff < 0.0f) {
+		diff = -diff;
+	}
+	return diff <= 0.001f;
+}
+static bool point_in_triangle(
+	float point_x, float point_y,
+	float ax, float ay,
+	float bx, float by,
+	float cx, float cy) {
+	float ab = (bx - ax) * (point_y - ay) - (by - ay) * (point_x - ax);
+	float bc = (cx - bx) * (point_y - by) - (cy - by) * (point_x - bx);
+	float ca = (ax - cx) * (point_y - cy) - (ay - cy) * (point_x - cx);
+	bool has_neg = (ab < 0.0f) || (bc < 0.0f) || (ca < 0.0f);
+	bool has_pos = (ab > 0.0f) || (bc > 0.0f) || (ca > 0.0f);
+	return !(has_neg && has_pos);
+}
+static bool on_segment(
+	float start_x, float start_y, float end_x, float end_y, float point_x, float point_y) {
+	float min_x = start_x < end_x ? start_x : end_x;
+	float max_x = start_x > end_x ? start_x : end_x;
+	float min_y = start_y < end_y ? start_y : end_y;
+	float max_y = start_y > end_y ? start_y : end_y;
+	return point_x >= min_x && point_x <= max_x
+		&& point_y >= min_y && point_y <= max_y;
+}
+static bool segments_intersect(
+	float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy) {
+	float d1 = cross_product(ax, ay, bx, by, cx, cy);
+	float d2 = cross_product(ax, ay, bx, by, dx, dy);
+	float d3 = cross_product(cx, cy, dx, dy, ax, ay);
+	float d4 = cross_product(cx, cy, dx, dy, bx, by);
+	if (((d1 > 0.0f && d2 < 0.0f) || (d1 < 0.0f && d2 > 0.0f)) &&
+		((d3 > 0.0f && d4 < 0.0f) || (d3 < 0.0f && d4 > 0.0f))) {
+		return true;
+	}
+	if (d1 == 0.0f && on_segment(ax, ay, bx, by, cx, cy)) {
+		return true;
+	}
+	if (d2 == 0.0f && on_segment(ax, ay, bx, by, dx, dy)) {
+		return true;
+	}
+	if (d3 == 0.0f && on_segment(cx, cy, dx, dy, ax, ay)) {
+		return true;
+	}
+	if (d4 == 0.0f && on_segment(cx, cy, dx, dy, bx, by)) {
+		return true;
+	}
+	return false;
+}
+static void apply_eraser_to_brush_points(
+	eraser_stroke &eraser, float point_x, float point_y) {
 	frame &active_frame = current_frame();
 	for (int index = 0; index <= active_frame.current_step; index += 1) {
 		if (index >= static_cast<int>(active_frame.drawables.size())) {
 			break;
 		}
 		drawable *item = active_frame.drawables[static_cast<std::size_t>(index)].get();
-		eraser_stroke *eraser = dynamic_cast<eraser_stroke *>(item);
-		if (!eraser) {
+		brush_stroke *brush = dynamic_cast<brush_stroke *>(item);
+		if (!brush) {
 			continue;
 		}
-		if (eraser->affected_brushes.find(brush_identifier)
-			== eraser->affected_brushes.end()) {
-			continue;
-		}
-		std::size_t count = eraser->x.size() < eraser->y.size()
-			? eraser->x.size() : eraser->y.size();
-		if (count == 0) {
-			continue;
-		}
-		for (std::size_t i = 0; i + 1 < count; i += 1) {
-			float distance = distance_point_to_segment(
-				point_x, point_y,
-				eraser->x[i], eraser->y[i],
-				eraser->x[i + 1], eraser->y[i + 1]
-			);
-			if (distance <= eraser->size * 2.0f) {
-				return true;
+		std::unordered_set<int> hit_indices;
+		std::size_t count = brush->x.size() < brush->y.size()
+			? brush->x.size() : brush->y.size();
+		float radius = eraser.size * 2.0f;
+		float radius_sq = radius * radius;
+		for (std::size_t i = 0; i < count; i += 1) {
+			float dx = brush->x[i] - point_x;
+			float dy = brush->y[i] - point_y;
+			if (dx * dx + dy * dy <= radius_sq) {
+				hit_indices.insert(static_cast<int>(i));
 			}
 		}
-		float dx = point_x - eraser->x[count - 1];
-		float dy = point_y - eraser->y[count - 1];
-		float radius = eraser->size * 2.0f;
-		if (dx * dx + dy * dy <= radius * radius) {
-			return true;
+		if (!hit_indices.empty()) {
+			std::unordered_set<int> &bucket = eraser.erased_points[brush->identifier];
+			bucket.insert(hit_indices.begin(), hit_indices.end());
 		}
 	}
-	return false;
+}
+static void apply_eraser_to_lines(
+	eraser_stroke &eraser,
+	float start_x, float start_y,
+	float end_x, float end_y) {
+	frame &active_frame = current_frame();
+	for (int index = 0; index <= active_frame.current_step; index += 1) {
+		if (index >= static_cast<int>(active_frame.drawables.size())) {
+			break;
+		}
+		drawable *item = active_frame.drawables[static_cast<std::size_t>(index)].get();
+		line_stroke *line = dynamic_cast<line_stroke *>(item);
+		if (!line) {
+			continue;
+		}
+		if (segments_intersect(
+			start_x, start_y, end_x, end_y,
+			line->x1, line->y1, line->x2, line->y2)) {
+			eraser.erased_points.emplace(
+				line->identifier, std::unordered_set<int>());
+		}
+	}
+}
+static void apply_eraser_to_quads(
+	eraser_stroke &eraser, float point_x, float point_y) {
+	frame &active_frame = current_frame();
+	for (int index = 0; index <= active_frame.current_step; index += 1) {
+		if (index >= static_cast<int>(active_frame.drawables.size())) {
+			break;
+		}
+		drawable *item = active_frame.drawables[static_cast<std::size_t>(index)].get();
+		quad_stroke *quad = dynamic_cast<quad_stroke *>(item);
+		if (!quad) {
+			continue;
+		}
+		float left = quad->x1 < quad->x2 ? quad->x1 : quad->x2;
+		float right = quad->x1 < quad->x2 ? quad->x2 : quad->x1;
+		float bottom = quad->y1 < quad->y2 ? quad->y1 : quad->y2;
+		float top = quad->y1 < quad->y2 ? quad->y2 : quad->y1;
+		if (point_x >= left && point_x <= right && point_y >= bottom && point_y <= top) {
+			eraser.erased_points.emplace(
+				quad->identifier, std::unordered_set<int>());
+		}
+	}
+}
+static void apply_eraser_to_triangles(
+	eraser_stroke &eraser, float point_x, float point_y) {
+	frame &active_frame = current_frame();
+	for (int index = 0; index <= active_frame.current_step; index += 1) {
+		if (index >= static_cast<int>(active_frame.drawables.size())) {
+			break;
+		}
+		drawable *item = active_frame.drawables[static_cast<std::size_t>(index)].get();
+		triangle_stroke *tri = dynamic_cast<triangle_stroke *>(item);
+		if (!tri) {
+			continue;
+		}
+		if (tri->state != 0) {
+			continue;
+		}
+		if (point_in_triangle(
+			point_x, point_y,
+			tri->x1, tri->y1,
+			tri->x2, tri->y2,
+			tri->x3, tri->y3)) {
+			eraser.erased_points.emplace(
+				tri->identifier, std::unordered_set<int>());
+		}
+	}
+}
+static void apply_eraser_to_polygons(
+	eraser_stroke &eraser, float point_x, float point_y) {
+	frame &active_frame = current_frame();
+	for (int index = 0; index <= active_frame.current_step; index += 1) {
+		if (index >= static_cast<int>(active_frame.drawables.size())) {
+			break;
+		}
+		drawable *item = active_frame.drawables[static_cast<std::size_t>(index)].get();
+		polygon_stroke *poly = dynamic_cast<polygon_stroke *>(item);
+		if (!poly) {
+			continue;
+		}
+		if (poly->state != 0) {
+			continue;
+		}
+		std::size_t count = poly->x.size() < poly->y.size()
+			? poly->x.size() : poly->y.size();
+		if (count < 3) {
+			continue;
+		}
+		std::vector<polygon_stroke::point> points;
+		points.reserve(count + 1);
+		for (std::size_t i = 0; i < count; i += 1) {
+			points.push_back(polygon_stroke::point(poly->x[i], poly->y[i]));
+		}
+		std::vector<polygon_stroke::point> base_hull =
+			polygon_stroke::build_hull(points);
+		points.push_back(polygon_stroke::point(point_x, point_y));
+		std::vector<polygon_stroke::point> test_hull =
+			polygon_stroke::build_hull(points);
+		if (test_hull.size() > base_hull.size()) {
+			continue;
+		}
+		bool all_present = true;
+		for (const polygon_stroke::point &p : base_hull) {
+			bool found = false;
+			for (const polygon_stroke::point &q : test_hull) {
+				if (nearly_equal(p.x, q.x) && nearly_equal(p.y, q.y)) {
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				all_present = false;
+				break;
+			}
+		}
+		if (all_present) {
+			eraser.erased_points.emplace(
+				poly->identifier, std::unordered_set<int>());
+		}
+	}
+}
+static void remove_current_drawable() {
+	frame &active_frame = current_frame();
+	if (active_frame.current_step < 0) {
+		return;
+	}
+	if (active_frame.current_step >= static_cast<int>(active_frame.drawables.size())) {
+		return;
+	}
+	active_frame.drawables.erase(
+		active_frame.drawables.begin() + active_frame.current_step
+	);
+	active_frame.current_step -= 1;
+	update_undo_redo_buttons();
 }
 static void update_undo_redo_buttons() {
 	if (is_playing) {
@@ -1107,7 +1343,13 @@ static void handle_left_mouse_down(float x, float y) {
 			if (current_tool == 5) {
 				eraser_stroke *eraser = dynamic_cast<eraser_stroke *>(active);
 				if (eraser) {
-					apply_eraser_at_point(*eraser, x, y);
+					apply_eraser_to_brush_points(*eraser, x, y);
+					apply_eraser_to_quads(*eraser, x, y);
+					apply_eraser_to_triangles(*eraser, x, y);
+					apply_eraser_to_polygons(*eraser, x, y);
+					eraser->last_x = x;
+					eraser->last_y = y;
+					eraser->has_last = true;
 				}
 			}
 		}
@@ -1117,9 +1359,42 @@ static void handle_left_mouse_down(float x, float y) {
 	if (current_tool == 5) {
 		eraser_stroke *eraser = dynamic_cast<eraser_stroke *>(active);
 		if (eraser) {
-		apply_eraser_at_point(*eraser, x, y);
+			if (eraser->has_last) {
+				float dx = x - eraser->last_x;
+				float dy = y - eraser->last_y;
+				float distance = std::sqrt(dx * dx + dy * dy);
+				float step = eraser->size * 0.5f;
+				if (step < 1.0f) {
+					step = 1.0f;
+				}
+				apply_eraser_to_lines(*eraser, eraser->last_x, eraser->last_y, x, y);
+				if (distance > step) {
+					int count = static_cast<int>(distance / step);
+					for (int index = 1; index < count; index += 1) {
+						float t = static_cast<float>(index) /
+							static_cast<float>(count);
+						apply_eraser_to_brush_points(
+							*eraser,
+							eraser->last_x + dx * t,
+							eraser->last_y + dy * t
+						);
+						apply_eraser_to_quads(
+							*eraser,
+							eraser->last_x + dx * t,
+							eraser->last_y + dy * t
+						);
+					}
+				}
+			}
+			apply_eraser_to_brush_points(*eraser, x, y);
+			apply_eraser_to_quads(*eraser, x, y);
+			apply_eraser_to_triangles(*eraser, x, y);
+			apply_eraser_to_polygons(*eraser, x, y);
+			eraser->last_x = x;
+			eraser->last_y = y;
+			eraser->has_last = true;
+		}
 	}
-}
 }
 static void handle_left_mouse_up(float x, float y) {
 	if (is_playing) {
@@ -1128,6 +1403,12 @@ static void handle_left_mouse_up(float x, float y) {
 	drawable *active = current_drawable();
 	if (active) {
 		active->left_mouse_button_up(x, y);
+		if (current_tool == 5) {
+			eraser_stroke *eraser = dynamic_cast<eraser_stroke *>(active);
+			if (eraser && eraser->erased_points.empty()) {
+				remove_current_drawable();
+			}
+		}
 	}
 }
 static void handle_left_clicked(float x, float y) {
@@ -1158,205 +1439,6 @@ static void handle_right_clicked(float x, float y) {
 	drawable *active = current_drawable();
 	if (active) {
 		active->right_clicked(x, y);
-	}
-}
-static float cross_product(
-	float start_x, float start_y, float end_x, float end_y, float point_x, float point_y) {
-	float abx = end_x - start_x;
-	float aby = end_y - start_y;
-	float acx = point_x - start_x;
-	float acy = point_y - start_y;
-	return abx * acy - aby * acx;
-}
-static bool on_segment(
-	float start_x, float start_y, float end_x, float end_y, float point_x, float point_y) {
-	float min_x = start_x < end_x ? start_x : end_x;
-	float max_x = start_x > end_x ? start_x : end_x;
-	float min_y = start_y < end_y ? start_y : end_y;
-	float max_y = start_y > end_y ? start_y : end_y;
-	return point_x >= min_x && point_x <= max_x
-		&& point_y >= min_y && point_y <= max_y;
-}
-static bool segments_intersect(
-	float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy) {
-	float d1 = cross_product(ax, ay, bx, by, cx, cy);
-	float d2 = cross_product(ax, ay, bx, by, dx, dy);
-	float d3 = cross_product(cx, cy, dx, dy, ax, ay);
-	float d4 = cross_product(cx, cy, dx, dy, bx, by);
-	if (((d1 > 0.0f && d2 < 0.0f) || (d1 < 0.0f && d2 > 0.0f)) &&
-		((d3 > 0.0f && d4 < 0.0f) || (d3 < 0.0f && d4 > 0.0f))) {
-		return true;
-	}
-	if (d1 == 0.0f && on_segment(ax, ay, bx, by, cx, cy)) {
-		return true;
-	}
-	if (d2 == 0.0f && on_segment(ax, ay, bx, by, dx, dy)) {
-		return true;
-	}
-	if (d3 == 0.0f && on_segment(cx, cy, dx, dy, ax, ay)) {
-		return true;
-	}
-	if (d4 == 0.0f && on_segment(cx, cy, dx, dy, bx, by)) {
-		return true;
-	}
-	return false;
-}
-static bool nearly_equal(float a, float b) {
-	float diff = a - b;
-	if (diff < 0.0f) {
-		diff = -diff;
-	}
-	return diff <= 0.001f;
-}
-static bool point_in_polygon(
-	float point_x, float point_y, const std::vector<float> &vx, const std::vector<float> &vy) {
-	std::size_t count = vx.size() < vy.size() ? vx.size() : vy.size();
-	if (count < 3) {
-		return false;
-	}
-	bool inside = false;
-	for (std::size_t i = 0, j = count - 1; i < count; j = i, i += 1) {
-		float xi = vx[i];
-		float yi = vy[i];
-		float xj = vx[j];
-		float yj = vy[j];
-		bool intersect = ((yi > point_y) != (yj > point_y)) &&
-			(point_x < (xj - xi) * (point_y - yi) / (yj - yi + 0.0f) + xi);
-		if (intersect) {
-			inside = !inside;
-		}
-	}
-	return inside;
-}
-static bool point_in_triangle(
-	float point_x, float point_y,
-	float ax, float ay,
-	float bx, float by,
-	float cx, float cy) {
-	float ab = (bx - ax) * (point_y - ay) - (by - ay) * (point_x - ax);
-	float bc = (cx - bx) * (point_y - by) - (cy - by) * (point_x - bx);
-	float ca = (ax - cx) * (point_y - cy) - (ay - cy) * (point_x - cx);
-	bool has_neg = (ab < 0.0f) || (bc < 0.0f) || (ca < 0.0f);
-	bool has_pos = (ab > 0.0f) || (bc > 0.0f) || (ca > 0.0f);
-	return !(has_neg && has_pos);
-}
-static bool is_brush_or_eraser(drawable *item) {
-	return dynamic_cast<brush_stroke *>(item) != nullptr ||
-		dynamic_cast<eraser_stroke *>(item) != nullptr;
-}
-static bool is_drawable_complete(drawable *item) {
-	return item && item->state == 0;
-}
-static bool is_erased(drawable *item) {
-	if (!item) {
-		return false;
-	}
-	frame &active_frame = current_frame();
-	for (int index = 0; index <= active_frame.current_step; index += 1) {
-		if (index >= static_cast<int>(active_frame.drawables.size())) {
-			break;
-		}
-		drawable *candidate = active_frame.drawables[static_cast<std::size_t>(index)].get();
-		eraser_stroke *eraser = dynamic_cast<eraser_stroke *>(candidate);
-		if (!eraser) {
-			continue;
-		}
-		if (eraser->erased.find(item->identifier) != eraser->erased.end()) {
-			return true;
-		}
-	}
-	return false;
-}
-static void apply_eraser_at_point(eraser_stroke &eraser, float point_x, float point_y) {
-	bool has_prev = eraser.x.size() >= 2 && eraser.y.size() >= 2;
-	float prev_x = has_prev ? eraser.x[eraser.x.size() - 2] : point_x;
-	float prev_y = has_prev ? eraser.y[eraser.y.size() - 2] : point_y;
-	frame &active_frame = current_frame();
-	for (int index = 0; index <= active_frame.current_step; index += 1) {
-		if (index >= static_cast<int>(active_frame.drawables.size())) {
-			break;
-		}
-		drawable *item = active_frame.drawables[static_cast<std::size_t>(index)].get();
-		if (!item || item == &eraser) {
-			continue;
-		}
-		if (!is_drawable_complete(item)) {
-			continue;
-		}
-		if (dynamic_cast<brush_stroke *>(item)) {
-			brush_stroke *brush = static_cast<brush_stroke *>(item);
-			std::size_t count = brush->x.size() < brush->y.size()
-				? brush->x.size() : brush->y.size();
-			float radius = eraser.size * 2.0f;
-			float radius_sq = radius * radius;
-			for (std::size_t i = 0; i < count; i += 1) {
-				float dx = brush->x[i] - point_x;
-				float dy = brush->y[i] - point_y;
-				if (dx * dx + dy * dy <= radius_sq) {
-					eraser.affected_brushes.insert(brush->identifier);
-					break;
-				}
-			}
-			continue;
-		}
-		if (dynamic_cast<eraser_stroke *>(item)) {
-			continue;
-		}
-		if (dynamic_cast<line_stroke *>(item)) {
-			line_stroke *line = static_cast<line_stroke *>(item);
-			if (segments_intersect(
-				prev_x, prev_y, point_x, point_y, line->x1, line->y1, line->x2, line->y2
-			)) {
-				eraser.erased.insert(item->identifier);
-			}
-			continue;
-		}
-		if (dynamic_cast<quad_stroke *>(item)) {
-			quad_stroke *quad = static_cast<quad_stroke *>(item);
-			float left = quad->x1 < quad->x2 ? quad->x1 : quad->x2;
-			float right = quad->x1 < quad->x2 ? quad->x2 : quad->x1;
-			float bottom = quad->y1 < quad->y2 ? quad->y1 : quad->y2;
-			float top = quad->y1 < quad->y2 ? quad->y2 : quad->y1;
-			if (point_x >= left && point_x <= right && point_y >= bottom && point_y <= top) {
-				eraser.erased.insert(item->identifier);
-			}
-			continue;
-		}
-		if (dynamic_cast<triangle_stroke *>(item)) {
-			triangle_stroke *tri = static_cast<triangle_stroke *>(item);
-			if (point_in_triangle(
-				point_x, point_y,
-				tri->x1, tri->y1,
-				tri->x2, tri->y2,
-				tri->x3, tri->y3
-			)) {
-				eraser.erased.insert(item->identifier);
-			}
-			continue;
-		}
-		if (dynamic_cast<polygon_stroke *>(item)) {
-			polygon_stroke *poly = static_cast<polygon_stroke *>(item);
-			std::vector<polygon_stroke::point> points;
-			std::size_t count = poly->x.size() < poly->y.size() ?
-				poly->x.size() : poly->y.size();
-			points.reserve(count + 1);
-			for (std::size_t i = 0; i < count; i += 1) {
-				points.push_back(polygon_stroke::point(poly->x[i], poly->y[i]));
-			}
-			points.push_back(polygon_stroke::point(point_x, point_y));
-			std::vector<polygon_stroke::point> hull = polygon_stroke::build_hull(points);
-			bool found = false;
-			for (const polygon_stroke::point &p : hull) {
-				if (nearly_equal(p.x, point_x) && nearly_equal(p.y, point_y)) {
-					found = true;
-					break;
-				}
-			}
-			if (!found) {
-				eraser.erased.insert(item->identifier);
-			}
-			continue;
-		}
 	}
 }
 static bool is_opengl_message(const MSG &message) {
@@ -1624,9 +1706,6 @@ static void render_frame() {
 		}
 		drawable *item = active_frame.drawables[static_cast<std::size_t>(index)].get();
 		if (!item) {
-			continue;
-		}
-		if (!is_brush_or_eraser(item) && is_erased(item)) {
 			continue;
 		}
 		item->draw(cursor_x, cursor_y, cursor_valid);
