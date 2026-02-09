@@ -1,4 +1,6 @@
 // developed by dl6822
+# include <array>
+# include <cstddef>
 # include <string>
 # include <utility>
 # include <functional>
@@ -14,10 +16,55 @@ struct button {
 	HWND handle = nullptr;
 	UINT shortcut = 0;
 	std::function<void()> function = {};
+	bool drawable = false;
 };
 static const wchar_t *window_class_name = L"Flash Window Class";
 static const wchar_t *window_title = L"Flash 2026";
 static std::unordered_map<int, button> buttons = {};
+static const std::array<const wchar_t *, 6> tool_names = {
+	L"Brush", L"Line", L"Triangle", L"Quad", L"Polygon", L"Eraser"
+};
+static const std::array<int, 6> tool_button_identifiers = {
+	1001, 1002, 1003, 1004, 1005, 1006
+};
+static int current_tool = 0;
+static const std::array<const wchar_t *, 3> brush_size_names = {
+	L"Small", L"Medium", L"Large"
+};
+static const std::array<int, 3> brush_size_button_identifiers = {
+	2001, 2002, 2003
+};
+static const std::array<const wchar_t *, 3> line_width_names = {
+	L"Thin", L"Medium", L"Thick"
+};
+static const std::array<int, 3> line_width_button_identifiers = {
+	2101, 2102, 2103
+};
+static const std::array<COLORREF, 24> color_values = {
+	RGB(0, 0, 0), RGB(255, 255, 255), RGB(255, 0, 0), RGB(0, 200, 0),
+	RGB(0, 0, 255), RGB(255, 255, 0), RGB(255, 0, 255), RGB(0, 255, 255),
+	RGB(255, 128, 0), RGB(153, 102, 51), RGB(128, 0, 128), RGB(255, 105, 180),
+	RGB(64, 64, 64), RGB(128, 128, 128), RGB(192, 192, 192), RGB(128, 0, 0),
+	RGB(0, 128, 0), RGB(0, 0, 128), RGB(128, 128, 0), RGB(0, 128, 128),
+	RGB(0, 64, 128), RGB(255, 215, 0), RGB(128, 255, 0), RGB(135, 206, 235)
+};
+static const std::array<bool, 24> color_is_light = {
+	false, true, false, false,
+	false, true, false, true,
+	true, false, false, true,
+	false, true, true, false,
+	false, false, true, false,
+	false, true, true, true
+};
+static const std::array<int, 24> color_button_identifiers = {
+	3001, 3002, 3003, 3004, 3005, 3006,
+	3007, 3008, 3009, 3010, 3011, 3012,
+	3013, 3014, 3015, 3016, 3017, 3018,
+	3019, 3020, 3021, 3022, 3023, 3024
+};
+static int current_brush_size = 0;
+static int current_line_width = 0;
+static int current_color = 0;
 static HINSTANCE instance_handle = nullptr;
 static HWND window_handle = nullptr;
 static HFONT font_handle = nullptr;
@@ -30,6 +77,114 @@ static LRESULT CALLBACK procedure(
 	if (message == WM_DESTROY) {
 		PostQuitMessage(0);
 		return 0;
+	} else if (message == WM_DRAWITEM) {
+		const DRAWITEMSTRUCT *draw_item = reinterpret_cast<const DRAWITEMSTRUCT *>(
+			long_parameter
+		);
+		if (draw_item && draw_item->CtlType == ODT_BUTTON) {
+			int identifier = static_cast<int>(draw_item->CtlID);
+			std::unordered_map<int, button>::iterator iterator = (
+				buttons.find(identifier)
+			);
+			if (iterator != buttons.end() && iterator->second.drawable) {
+				bool is_color = false;
+				bool selected_button = false;
+				int color_index = -1;
+				COLORREF fill_color = GetSysColor(COLOR_BTNFACE);
+				for (std::size_t index = 0;
+					index < tool_button_identifiers.size(); index += 1) {
+					if (tool_button_identifiers[index] == identifier) {
+						selected_button = static_cast<int>(index) == current_tool;
+						break;
+					}
+				}
+				for (std::size_t index = 0;
+					index < brush_size_button_identifiers.size(); index += 1) {
+					if (brush_size_button_identifiers[index] == identifier) {
+						selected_button = static_cast<int>(index) == current_brush_size;
+						break;
+					}
+				}
+				for (std::size_t index = 0;
+					index < line_width_button_identifiers.size(); index += 1) {
+					if (line_width_button_identifiers[index] == identifier) {
+						selected_button = static_cast<int>(index) == current_line_width;
+						break;
+					}
+				}
+				for (std::size_t index = 0;
+					index < color_button_identifiers.size(); index += 1) {
+					if (color_button_identifiers[index] == identifier) {
+						selected_button = static_cast<int>(index) == current_color;
+						is_color = true;
+						color_index = static_cast<int>(index);
+						fill_color = color_values[index];
+						break;
+					}
+				}
+				if (is_color) {
+					HBRUSH brush = CreateSolidBrush(fill_color);
+					FillRect(draw_item->hDC, &draw_item->rcItem, brush);
+					DeleteObject(brush);
+					SetBkMode(draw_item->hDC, TRANSPARENT);
+					if (color_index >= 0) {
+						SetTextColor(
+							draw_item->hDC,
+							color_is_light[color_index] ?
+							RGB(0, 0, 0) : RGB(255, 255, 255)
+						);
+					}
+					HGDIOBJ old_font = nullptr;
+					if (font_handle) {
+						old_font = SelectObject(draw_item->hDC, font_handle);
+					}
+					wchar_t text_buffer[8] = {};
+					GetWindowTextW(
+						draw_item->hwndItem, text_buffer,
+						static_cast<int>(sizeof(text_buffer) / sizeof(text_buffer[0]))
+					);
+					RECT text_rect = draw_item->rcItem;
+					DrawTextW(
+						draw_item->hDC, text_buffer, -1, &text_rect,
+						DT_CENTER | DT_VCENTER | DT_SINGLELINE
+					);
+					if (old_font) {
+						SelectObject(draw_item->hDC, old_font);
+					}
+				} else {
+					COLORREF background = selected_button ?
+						RGB(235, 90, 90) : GetSysColor(COLOR_BTNFACE);
+					COLORREF text_color = selected_button ?
+						RGB(255, 255, 255) : GetSysColor(COLOR_BTNTEXT);
+					HBRUSH brush = CreateSolidBrush(background);
+					FillRect(draw_item->hDC, &draw_item->rcItem, brush);
+					DeleteObject(brush);
+					SetBkMode(draw_item->hDC, TRANSPARENT);
+					SetTextColor(draw_item->hDC, text_color);
+					HGDIOBJ old_font = nullptr;
+					if (font_handle) {
+						old_font = SelectObject(draw_item->hDC, font_handle);
+					}
+					wchar_t text_buffer[128] = {};
+					GetWindowTextW(
+						draw_item->hwndItem, text_buffer,
+						static_cast<int>(sizeof(text_buffer) / sizeof(text_buffer[0]))
+					);
+					RECT text_rect = draw_item->rcItem;
+					DrawTextW(
+						draw_item->hDC, text_buffer, -1, &text_rect,
+						DT_CENTER | DT_VCENTER | DT_SINGLELINE
+					);
+					if (draw_item->itemState & ODS_FOCUS) {
+						DrawFocusRect(draw_item->hDC, &draw_item->rcItem);
+					}
+					if (old_font) {
+						SelectObject(draw_item->hDC, old_font);
+					}
+				}
+				return TRUE;
+			}
+		}
 	} else if (message == WM_COMMAND) {
 		int code = HIWORD(word_parameter);
 		if (code == BN_CLICKED) {
@@ -129,17 +284,22 @@ static void destroy_ui_font() {
 }
 static void create_button(
 	int identifier, const std::wstring &text, UINT shortcut,
-	int x, int y, int width, int height, std::function<void()> function) {
+	int x, int y, int width, int height, std::function<void()> function,
+	bool drawable = false) {
 	button new_button = button();
+	DWORD style = WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON;
+	if (drawable) {
+		style |= BS_OWNERDRAW;
+	}
 	new_button.handle = CreateWindowW(
-		L"BUTTON", text.c_str(),
-		WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+		L"BUTTON", text.c_str(), style,
 		x, y, width, height, window_handle,
 		reinterpret_cast<HMENU>(static_cast<INT_PTR>(identifier)),
 		instance_handle, nullptr
 	);
 	new_button.shortcut = shortcut;
 	new_button.function = std::move(function);
+	new_button.drawable = drawable;
 	SendMessageW(
 		new_button.handle, WM_SETFONT,
 		reinterpret_cast<WPARAM>(font_handle), TRUE
@@ -153,7 +313,93 @@ static void update_button_text(
 	);
 	if (iterator != buttons.end()) {
 		SetWindowTextW(iterator->second.handle, text.c_str());
+		InvalidateRect(iterator->second.handle, nullptr, TRUE);
 	}
+}
+static std::wstring format_tool_button_text(int index) {
+	std::wstring text = tool_names[static_cast<std::size_t>(index)];
+	text += L" [";
+	text += static_cast<wchar_t>(L'1' + index);
+	text += L"]";
+	return text;
+}
+static void update_tool_buttons() {
+	for (std::size_t index = 0;
+		index < tool_button_identifiers.size(); index += 1) {
+		update_button_text(
+			tool_button_identifiers[index],
+			format_tool_button_text(
+				static_cast<int>(index)
+			)
+		);
+	}
+}
+static void update_brush_size_buttons() {
+	for (std::size_t index = 0;
+		index < brush_size_button_identifiers.size(); index += 1) {
+		update_button_text(
+			brush_size_button_identifiers[index],
+			brush_size_names[index]
+		);
+	}
+}
+static void update_line_width_buttons() {
+	for (std::size_t index = 0;
+		index < line_width_button_identifiers.size(); index += 1) {
+		update_button_text(
+			line_width_button_identifiers[index],
+			line_width_names[index]
+		);
+	}
+}
+static void update_color_buttons() {
+	for (std::size_t index = 0;
+		index < color_button_identifiers.size(); index += 1) {
+		update_button_text(
+			color_button_identifiers[index],
+			static_cast<int>(index) == current_color ? L"X" : L""
+		);
+	}
+}
+static void set_current_tool(int index) {
+	if (index < 0 || index >= static_cast<int>(tool_button_identifiers.size())) {
+		return;
+	}
+	if (current_tool == index) {
+		return;
+	}
+	current_tool = index;
+	update_tool_buttons();
+}
+static void set_current_brush_size(int index) {
+	if (index < 0 || index >= static_cast<int>(brush_size_button_identifiers.size())) {
+		return;
+	}
+	if (current_brush_size == index) {
+		return;
+	}
+	current_brush_size = index;
+	update_brush_size_buttons();
+}
+static void set_current_line_width(int index) {
+	if (index < 0 || index >= static_cast<int>(line_width_button_identifiers.size())) {
+		return;
+	}
+	if (current_line_width == index) {
+		return;
+	}
+	current_line_width = index;
+	update_line_width_buttons();
+}
+static void set_current_color(int index) {
+	if (index < 0 || index >= static_cast<int>(color_button_identifiers.size())) {
+		return;
+	}
+	if (current_color == index) {
+		return;
+	}
+	current_color = index;
+	update_color_buttons();
 }
 static void show_message_box(
 	const std::wstring &title,
@@ -290,6 +536,8 @@ int main() {
 	int window_height = GetSystemMetrics(SM_CYSCREEN) * 2 / 3;
 	int button_height = window_height / 20;
 	int button_width = button_height * 4;
+	int button_gap = button_height / 4;
+	int group_gap = button_height;
 	if (!create_main_window(window_width, window_height)) {
 		destroy_window_class();
 		return 2;
@@ -298,6 +546,111 @@ int main() {
 		destroy_main_window();
 		destroy_window_class();
 		return 3;
+	}
+	int tools_total_height = (
+		static_cast<int>(tool_button_identifiers.size()) * button_height
+		+ static_cast<int>(tool_button_identifiers.size() - 1) * button_gap
+	);
+	int tools_start_y = (window_height - tools_total_height) / 2;
+	tools_start_y -= window_height / 10;
+	if (tools_start_y < 5) {
+		tools_start_y = 5;
+	}
+	int tools_x = 10;
+	for (std::size_t index = 0;
+		index < tool_button_identifiers.size(); index += 1) {
+		int y = tools_start_y + static_cast<int>(index) * (button_height + button_gap);
+		int tool_index = static_cast<int>(index);
+		create_button(
+			tool_button_identifiers[index],
+			format_tool_button_text(tool_index),
+			static_cast<UINT>(L'1' + index),
+			tools_x, y,
+			button_width, button_height,
+			[tool_index]() {
+				set_current_tool(tool_index);
+			},
+			true
+		);
+	}
+	int sizes_height = (
+		static_cast<int>(brush_size_button_identifiers.size()) * button_height
+		+ static_cast<int>(brush_size_button_identifiers.size() - 1) * button_gap
+	);
+	int lines_height = (
+		static_cast<int>(line_width_button_identifiers.size()) * button_height
+		+ static_cast<int>(line_width_button_identifiers.size() - 1) * button_gap
+	);
+	int color_gap = button_height / 6;
+	int color_columns = 4;
+	int color_cell = (button_width - (color_columns - 1) * color_gap) / color_columns;
+	if (color_cell < 6) {
+		color_cell = 6;
+	}
+	int color_rows = static_cast<int>(color_button_identifiers.size()) / color_columns;
+	int colors_height = color_rows * color_cell + (color_rows - 1) * color_gap;
+	int right_margin = 10;
+	int sizes_x = window_width - button_width - right_margin;
+	int line_x = sizes_x;
+	int colors_width = color_columns * color_cell + (color_columns - 1) * color_gap;
+	int colors_x = window_width - colors_width - right_margin;
+	int colors_start_y = window_height - (button_height * 2) - colors_height;
+	int lines_start_y = colors_start_y - group_gap - lines_height;
+	int sizes_start_y = lines_start_y - group_gap - sizes_height;
+	if (sizes_start_y < 5) {
+		int delta = 5 - sizes_start_y;
+		sizes_start_y += delta;
+		lines_start_y += delta;
+		colors_start_y += delta;
+	}
+	for (std::size_t index = 0;
+		index < brush_size_button_identifiers.size(); index += 1) {
+		int y = sizes_start_y + static_cast<int>(index) * (button_height + button_gap);
+		int size_index = static_cast<int>(index);
+		create_button(
+			brush_size_button_identifiers[index],
+			brush_size_names[index],
+			0,
+			sizes_x, y,
+			button_width, button_height,
+			[size_index]() {
+				set_current_brush_size(size_index);
+			},
+			true
+		);
+	}
+	for (std::size_t index = 0;
+		index < line_width_button_identifiers.size(); index += 1) {
+		int y = lines_start_y + static_cast<int>(index) * (button_height + button_gap);
+		int line_index = static_cast<int>(index);
+		create_button(
+			line_width_button_identifiers[index],
+			line_width_names[index],
+			0,
+			line_x, y,
+			button_width, button_height,
+			[line_index]() {
+				set_current_line_width(line_index);
+			},
+			true
+		);
+	}
+	for (std::size_t index = 0;
+		index < color_button_identifiers.size(); index += 1) {
+		int row = static_cast<int>(index) / color_columns;
+		int column = static_cast<int>(index) % color_columns;
+		int x = colors_x + column * (color_cell + color_gap);
+		int y = colors_start_y + row * (color_cell + color_gap);
+		int color_index = static_cast<int>(index);
+		create_button(
+			color_button_identifiers[index],
+			color_index == current_color ? L"X" : L"",
+			0, x, y, color_cell, color_cell,
+			[color_index]() {
+				set_current_color(color_index);
+			},
+			true
+		);
 	}
 	create_button(
 		9999, L"About [A]", 'A',
@@ -323,15 +676,15 @@ int main() {
 			if (message.message == WM_QUIT) {
 				running = false;
 				break;
-			} else if (message.message == WM_KEYDOWN) {
+			}
+			if (message.message == WM_KEYDOWN) {
 				UINT key = static_cast<UINT>(message.wParam);
 				if (process_button_shortcut(key)) {
 					continue;
 				}
-			} else {
-				TranslateMessage(&message);
-				DispatchMessageW(&message);
 			}
+			TranslateMessage(&message);
+			DispatchMessageW(&message);
 		}
 		if (opengl_window_handle) {
 			render_frame();
