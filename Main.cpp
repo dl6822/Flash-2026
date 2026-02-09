@@ -267,7 +267,7 @@ struct polygon_stroke : drawable {
 		return abx * acy - aby * acx;
 	}
 	static std::vector<point> build_hull(const std::vector<point> &points) {
-		if (points.size() <= 2U) {
+		if (points.size() <= 2) {
 			return points;
 		}
 		std::vector<point> sorted = points;
@@ -282,9 +282,9 @@ struct polygon_stroke : drawable {
 		);
 		std::vector<point> hull;
 		for (const point &p : sorted) {
-			while (hull.size() >= 2U) {
-				std::size_t last = hull.size() - 1U;
-				if (cross(hull[last - 1U], hull[last], p) > 0.0f) {
+			while (hull.size() >= 2) {
+				std::size_t last = hull.size() - 1;
+				if (cross(hull[last - 1], hull[last], p) > 0.0f) {
 					break;
 				}
 				hull.pop_back();
@@ -292,16 +292,20 @@ struct polygon_stroke : drawable {
 			hull.push_back(p);
 		}
 		std::size_t lower_size = hull.size();
-		for (std::size_t index = sorted.size(); index-- > 0U;) {
-			const point &p = sorted[index];
-			while (hull.size() > lower_size) {
-				std::size_t last = hull.size() - 1U;
-				if (cross(hull[last - 1U], hull[last], p) > 0.0f) {
-					break;
+		if (!sorted.empty()) {
+			std::size_t index = sorted.size();
+			while (index > 0) {
+				index -= 1;
+				const point &p = sorted[index];
+				while (hull.size() > lower_size) {
+					std::size_t last = hull.size() - 1;
+					if (cross(hull[last - 1], hull[last], p) > 0.0f) {
+						break;
+					}
+					hull.pop_back();
 				}
-				hull.pop_back();
+				hull.push_back(p);
 			}
-			hull.push_back(p);
 		}
 		if (!hull.empty()) {
 			hull.pop_back();
@@ -351,7 +355,7 @@ struct polygon_stroke : drawable {
 			cursor_valid = false;
 		}
 		std::vector<point> points;
-		points.reserve(count + (cursor_valid ? 1U : 0U));
+		points.reserve(count + (cursor_valid ? 1 : 0));
 		for (std::size_t index = 0; index < count; index += 1) {
 			points.push_back(point(x[index], y[index]));
 		}
@@ -360,7 +364,7 @@ struct polygon_stroke : drawable {
 		}
 		std::vector<point> hull = build_hull(points);
 		std::size_t hull_count = hull.size();
-		if (hull_count == 0U) {
+		if (hull_count == 0) {
 			return;
 		}
 		glColor3ub(
@@ -368,7 +372,7 @@ struct polygon_stroke : drawable {
 			static_cast<GLubyte>(GetGValue(color)),
 			static_cast<GLubyte>(GetBValue(color))
 		);
-		if (state == 0 && hull_count >= 3U) {
+		if (state == 0 && hull_count >= 3) {
 			glBegin(GL_POLYGON);
 			for (const point &p : hull) {
 				glVertex2f(p.x, p.y);
@@ -482,7 +486,6 @@ static const int redo_button_identifier = 4002;
 static const int clear_button_identifier = 4003;
 static const int hint_button_identifier = 4004;
 static const int play_button_identifier = 5001;
-static const int stop_button_identifier = 5002;
 static const int add_frame_button_identifier = 5003;
 static const int copy_frame_button_identifier = 5004;
 static const int delete_frame_button_identifier = 5005;
@@ -491,9 +494,13 @@ static const int previous_frame_button_identifier = 5007;
 static const int next_frame_button_identifier = 5008;
 static const int last_frame_button_identifier = 5009;
 static const int frame_label_button_identifier = 5010;
+static const UINT animation_timer_identifier = 1;
+static const UINT animation_timer_interval = 100;
 static int current_brush_size = 0;
 static int current_line_width = 0;
 static int current_color = 0;
+static int current_frame_index = 0;
+static bool is_playing = false;
 static bool left_mouse_down = false;
 static float stage_left = 0.0f;
 static float stage_right = 0.0f;
@@ -502,6 +509,7 @@ static float stage_top = 0.0f;
 static float cursor_x = 0.0f;
 static float cursor_y = 0.0f;
 static bool cursor_valid = false;
+static void select_frame(int index);
 static HINSTANCE instance_handle = nullptr;
 static HWND window_handle = nullptr;
 static HFONT font_handle = nullptr;
@@ -643,6 +651,15 @@ static LRESULT CALLBACK procedure(
 				return 0;
 			}
 		}
+	} else if (message == WM_TIMER) {
+		if (word_parameter == animation_timer_identifier && is_playing) {
+			int next_index = current_frame_index + 1;
+			if (next_index >= static_cast<int>(frames.size())) {
+				next_index = 0;
+			}
+			select_frame(next_index);
+			return 0;
+		}
 	}
 	return DefWindowProcW(
 		procedure_window_handle, message,
@@ -756,6 +773,9 @@ static void update_button_text(
 	if (iterator != buttons.end()) {
 		SetWindowTextW(iterator->second.handle, text.c_str());
 		InvalidateRect(iterator->second.handle, nullptr, TRUE);
+		if (!IsWindowEnabled(iterator->second.handle)) {
+			EnableWindow(iterator->second.handle, FALSE);
+		}
 	}
 }
 static void set_button_enabled(int identifier, bool enabled) {
@@ -770,8 +790,18 @@ static void set_button_enabled(int identifier, bool enabled) {
 		}
 	}
 }
+static void set_buttons_enabled_for_playback(bool enabled) {
+	for (const std::pair<const int, button> &entry : buttons) {
+		if (entry.first == play_button_identifier
+			|| entry.first == hint_button_identifier
+			|| entry.first == frame_label_button_identifier) {
+			continue;
+		}
+		set_button_enabled(entry.first, enabled);
+	}
+}
 static frame &current_frame() {
-	return frames[0];
+	return frames[static_cast<std::size_t>(current_frame_index)];
 }
 static float distance_point_to_segment(
 	float point_x, float point_y, float start_x, float start_y, float end_x, float end_y) {
@@ -812,21 +842,21 @@ static bool brush_point_erased(float point_x, float point_y, int brush_identifie
 		}
 		std::size_t count = eraser->x.size() < eraser->y.size()
 			? eraser->x.size() : eraser->y.size();
-		if (count == 0U) {
+		if (count == 0) {
 			continue;
 		}
-		for (std::size_t i = 0; i + 1U < count; i += 1) {
+		for (std::size_t i = 0; i + 1 < count; i += 1) {
 			float distance = distance_point_to_segment(
 				point_x, point_y,
 				eraser->x[i], eraser->y[i],
-				eraser->x[i + 1U], eraser->y[i + 1U]
+				eraser->x[i + 1], eraser->y[i + 1]
 			);
 			if (distance <= eraser->size * 2.0f) {
 				return true;
 			}
 		}
-		float dx = point_x - eraser->x[count - 1U];
-		float dy = point_y - eraser->y[count - 1U];
+		float dx = point_x - eraser->x[count - 1];
+		float dy = point_y - eraser->y[count - 1];
 		float radius = eraser->size * 2.0f;
 		if (dx * dx + dy * dy <= radius * radius) {
 			return true;
@@ -835,6 +865,12 @@ static bool brush_point_erased(float point_x, float point_y, int brush_identifie
 	return false;
 }
 static void update_undo_redo_buttons() {
+	if (is_playing) {
+		set_button_enabled(undo_button_identifier, false);
+		set_button_enabled(redo_button_identifier, false);
+		set_button_enabled(clear_button_identifier, false);
+		return;
+	}
 	frame &active_frame = current_frame();
 	set_button_enabled(undo_button_identifier, active_frame.current_step >= 0);
 	set_button_enabled(
@@ -842,6 +878,107 @@ static void update_undo_redo_buttons() {
 		active_frame.current_step + 1 < static_cast<int>(active_frame.drawables.size())
 	);
 	set_button_enabled(clear_button_identifier, !active_frame.drawables.empty());
+}
+static void update_frame_label() {
+	int total_frames = static_cast<int>(frames.size());
+	if (total_frames < 1) {
+		total_frames = 1;
+	}
+	int display_index = current_frame_index + 1;
+	if (display_index < 1) {
+		display_index = 1;
+	} else if (display_index > total_frames) {
+		display_index = total_frames;
+	}
+	update_button_text(
+		frame_label_button_identifier,
+		L"  Frame " + std::to_wstring(display_index) + L" / "
+			+ std::to_wstring(total_frames) + L"  "
+	);
+}
+static void select_frame(int index) {
+	if (frames.empty()) {
+		frames.push_back(frame());
+	}
+	int total_frames = static_cast<int>(frames.size());
+	if (index < 0) {
+		index = 0;
+	} else if (index >= total_frames) {
+		index = total_frames - 1;
+	}
+	current_frame_index = index;
+	update_frame_label();
+	update_undo_redo_buttons();
+}
+static void add_empty_frame() {
+	frames.push_back(frame());
+	select_frame(static_cast<int>(frames.size()) - 1);
+}
+static void copy_current_frame_as_new() {
+	frame new_frame;
+	frame &active_frame = current_frame();
+	new_frame.current_step = active_frame.current_step;
+	new_frame.drawables.reserve(active_frame.drawables.size());
+	for (const std::unique_ptr<drawable> &item : active_frame.drawables) {
+		if (const brush_stroke *brush = dynamic_cast<const brush_stroke *>(item.get())) {
+			std::unique_ptr<brush_stroke> copy = std::make_unique<brush_stroke>(*brush);
+			new_frame.drawables.push_back(std::move(copy));
+		} else if (const line_stroke *line = dynamic_cast<const line_stroke *>(item.get())) {
+			std::unique_ptr<line_stroke> copy = std::make_unique<line_stroke>(*line);
+			new_frame.drawables.push_back(std::move(copy));
+		} else if (const quad_stroke *quad = dynamic_cast<const quad_stroke *>(item.get())) {
+			std::unique_ptr<quad_stroke> copy = std::make_unique<quad_stroke>(*quad);
+			new_frame.drawables.push_back(std::move(copy));
+		} else if (const triangle_stroke *tri = dynamic_cast<const triangle_stroke *>(item.get())) {
+			std::unique_ptr<triangle_stroke> copy = std::make_unique<triangle_stroke>(*tri);
+			new_frame.drawables.push_back(std::move(copy));
+		} else if (const polygon_stroke *poly = dynamic_cast<const polygon_stroke *>(item.get())) {
+			std::unique_ptr<polygon_stroke> copy = std::make_unique<polygon_stroke>(*poly);
+			new_frame.drawables.push_back(std::move(copy));
+		} else if (const eraser_stroke *eraser = dynamic_cast<const eraser_stroke *>(item.get())) {
+			std::unique_ptr<eraser_stroke> copy = std::make_unique<eraser_stroke>(*eraser);
+			new_frame.drawables.push_back(std::move(copy));
+		}
+	}
+	frames.push_back(std::move(new_frame));
+	select_frame(static_cast<int>(frames.size()) - 1);
+}
+static void delete_current_frame() {
+	if (frames.size() <= 1) {
+		frames[0] = frame();
+		select_frame(0);
+		return;
+	}
+	frames.erase(frames.begin() + current_frame_index);
+	if (current_frame_index >= static_cast<int>(frames.size())) {
+		current_frame_index = static_cast<int>(frames.size()) - 1;
+	}
+	select_frame(current_frame_index);
+}
+static void play_animation() {
+	if (is_playing) {
+		return;
+	}
+	is_playing = true;
+	SetTimer(window_handle, animation_timer_identifier, animation_timer_interval, nullptr);
+	update_button_text(play_button_identifier, L"Stop [Space]");
+	set_buttons_enabled_for_playback(false);
+}
+static void stop_animation() {
+	if (!is_playing) {
+		return;
+	}
+	is_playing = false;
+	KillTimer(window_handle, animation_timer_identifier);
+	update_button_text(play_button_identifier, L"Play [Space]");
+	set_buttons_enabled_for_playback(true);
+}
+static void toggle_playback() {
+	if (is_playing) {
+		stop_animation();
+	} else {
+		play_animation();
+	}
 }
 static float brush_size_value() {
 	static const float values[] = {4.0f, 8.0f, 14.0f};
@@ -935,6 +1072,9 @@ static void clear_action() {
 	update_undo_redo_buttons();
 }
 static void handle_left_mouse_down(float x, float y) {
+	if (is_playing) {
+		return;
+	}
 	if (current_tool == 3 || current_tool == 4) {
 		return;
 	}
@@ -966,12 +1106,18 @@ static void handle_left_mouse_down(float x, float y) {
 }
 }
 static void handle_left_mouse_up(float x, float y) {
+	if (is_playing) {
+		return;
+	}
 	drawable *active = current_drawable();
 	if (active) {
 		active->left_mouse_button_up(x, y);
 	}
 }
 static void handle_left_clicked(float x, float y) {
+	if (is_playing) {
+		return;
+	}
 	if (current_tool != 3 && current_tool != 4) {
 		return;
 	}
@@ -990,6 +1136,9 @@ static void handle_left_clicked(float x, float y) {
 	active->left_clicked(x, y);
 }
 static void handle_right_clicked(float x, float y) {
+	if (is_playing) {
+		return;
+	}
 	drawable *active = current_drawable();
 	if (active) {
 		active->right_clicked(x, y);
@@ -1046,7 +1195,7 @@ static bool nearly_equal(float a, float b) {
 static bool point_in_polygon(
 	float point_x, float point_y, const std::vector<float> &vx, const std::vector<float> &vy) {
 	std::size_t count = vx.size() < vy.size() ? vx.size() : vy.size();
-	if (count < 3U) {
+	if (count < 3) {
 		return false;
 	}
 	bool inside = false;
@@ -1103,9 +1252,9 @@ static bool is_erased(drawable *item) {
 	return false;
 }
 static void apply_eraser_at_point(eraser_stroke &eraser, float point_x, float point_y) {
-	bool has_prev = eraser.x.size() >= 2U && eraser.y.size() >= 2U;
-	float prev_x = has_prev ? eraser.x[eraser.x.size() - 2U] : point_x;
-	float prev_y = has_prev ? eraser.y[eraser.y.size() - 2U] : point_y;
+	bool has_prev = eraser.x.size() >= 2 && eraser.y.size() >= 2;
+	float prev_x = has_prev ? eraser.x[eraser.x.size() - 2] : point_x;
+	float prev_y = has_prev ? eraser.y[eraser.y.size() - 2] : point_y;
 	frame &active_frame = current_frame();
 	for (int index = 0; index <= active_frame.current_step; index += 1) {
 		if (index >= static_cast<int>(active_frame.drawables.size())) {
@@ -1174,7 +1323,7 @@ static void apply_eraser_at_point(eraser_stroke &eraser, float point_x, float po
 			std::vector<polygon_stroke::point> points;
 			std::size_t count = poly->x.size() < poly->y.size() ?
 				poly->x.size() : poly->y.size();
-			points.reserve(count + 1U);
+			points.reserve(count + 1);
 			for (std::size_t i = 0; i < count; i += 1) {
 				points.push_back(polygon_stroke::point(poly->x[i], poly->y[i]));
 			}
@@ -1203,6 +1352,13 @@ static void to_opengl_coordinates(float &x, float &y) {
 	y = static_cast<float>(client.bottom - client.top) - y;
 }
 static bool handle_key_shortcuts(UINT key) {
+	if (key == VK_SPACE) {
+		toggle_playback();
+		return true;
+	}
+	if (is_playing) {
+		return false;
+	}
 	if (key == 'Z') {
 		undo_action();
 		return true;
@@ -1671,28 +1827,44 @@ int main() {
 	int label_width = right_row_x - bottom_gap - label_x;
 	int upper_row_y = bottom_row_y - button_height - bottom_gap;
 	create_button(
-		first_frame_button_identifier, L"First Frame", 0,
+		first_frame_button_identifier, L"First Frame [Q]", 'Q',
 		bottom_row_x, bottom_row_y,
 		anim_button_width, button_height,
-		[]() {}
+		[]() {
+			select_frame(0);
+		}
 	);
 	create_button(
-		previous_frame_button_identifier, L"Previous Frame", 0,
+		previous_frame_button_identifier, L"Previous Frame [A]", 'A',
 		bottom_row_x + anim_button_width + bottom_gap, bottom_row_y,
 		anim_button_width, button_height,
-		[]() {}
+		[]() {
+			int next_index = current_frame_index - 1;
+			if (next_index < 0) {
+				next_index = static_cast<int>(frames.size()) - 1;
+			}
+			select_frame(next_index);
+		}
 	);
 	create_button(
-		next_frame_button_identifier, L"Next Frame", 0,
+		next_frame_button_identifier, L"Next Frame [D]", 'D',
 		right_row_x, bottom_row_y,
 		anim_button_width, button_height,
-		[]() {}
+		[]() {
+			int next_index = current_frame_index + 1;
+			if (next_index >= static_cast<int>(frames.size())) {
+				next_index = 0;
+			}
+			select_frame(next_index);
+		}
 	);
 	create_button(
-		last_frame_button_identifier, L"Last Frame", 0,
+		last_frame_button_identifier, L"Last Frame [E]", 'E',
 		right_row_x + anim_button_width + bottom_gap, bottom_row_y,
 		anim_button_width, button_height,
-		[]() {}
+		[]() {
+			select_frame(static_cast<int>(frames.size()) - 1);
+		}
 	);
 	create_button(
 		frame_label_button_identifier, L"  Frame 1 / 1  ", 0,
@@ -1701,39 +1873,42 @@ int main() {
 		[]() {}
 	);
 	set_button_enabled(frame_label_button_identifier, false);
+	update_frame_label();
 	create_button(
-		play_button_identifier, L"Play", 0,
+		play_button_identifier, L"Play [Space]", VK_SPACE,
 		bottom_row_x, upper_row_y,
-		anim_button_width, button_height,
-		[]() {}
-	);
-	create_button(
-		stop_button_identifier, L"Stop", 0,
-		bottom_row_x + anim_button_width + bottom_gap, upper_row_y,
-		anim_button_width, button_height,
-		[]() {}
+		right_row_width, button_height,
+		[]() {
+			toggle_playback();
+		}
 	);
 	int mid_button_width = (label_width - bottom_gap) / 2;
 	create_button(
 		add_frame_button_identifier, L"Add New Empty Frame", 0,
 		label_x, upper_row_y,
 		mid_button_width, button_height,
-		[]() {}
+		[]() {
+			add_empty_frame();
+		}
 	);
 	create_button(
 		copy_frame_button_identifier, L"Copy Current Frame As New", 0,
 		label_x + mid_button_width + bottom_gap, upper_row_y,
 		mid_button_width, button_height,
-		[]() {}
+		[]() {
+			copy_current_frame_as_new();
+		}
 	);
 	create_button(
 		delete_frame_button_identifier, L"Delete Current Frame", 0,
 		right_row_x, upper_row_y,
 		right_row_width, button_height,
-		[]() {}
+		[]() {
+			delete_current_frame();
+		}
 	);
 	create_button(
-		9999, L"About [A]", 'A',
+		9999, L"About", 0,
 		about_x, top_margin,
 		button_width, button_height,
 		[]() {
@@ -1761,6 +1936,9 @@ int main() {
 				UINT key = static_cast<UINT>(message.wParam);
 				if (handle_key_shortcuts(key)) {
 					SetFocus(window_handle);
+					continue;
+				}
+				if (is_playing) {
 					continue;
 				}
 				if (process_button_shortcut(key)) {
