@@ -27,7 +27,7 @@ struct button {
 struct drawable {
 	int state = 0;
 	int identifier = 0;
-	inline static int next_identifier = 0;
+	static int next_identifier;
 	drawable() : identifier(drawable::next_identifier += 1) {}
 	virtual void left_mouse_button_down(float, float) {}
 	virtual void left_mouse_button_up(float, float) {}
@@ -36,6 +36,7 @@ struct drawable {
 	virtual void draw(float, float, bool) const = 0;
 	virtual ~drawable() = default;
 };
+int drawable::next_identifier = 0;
 struct frame;
 struct eraser_stroke;
 static frame &current_frame();
@@ -673,7 +674,7 @@ static LRESULT CALLBACK procedure(
 }
 static bool create_window_class() {
 	if (!SetProcessDpiAwarenessContext(
-		DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {
+		DPI_AWARENESS_CONTEXT_SYSTEM_AWARE)) {
 		SetProcessDPIAware();
 	}
 	instance_handle = GetModuleHandleW(nullptr);
