@@ -481,6 +481,16 @@ static const int undo_button_identifier = 4001;
 static const int redo_button_identifier = 4002;
 static const int clear_button_identifier = 4003;
 static const int hint_button_identifier = 4004;
+static const int play_button_identifier = 5001;
+static const int stop_button_identifier = 5002;
+static const int add_frame_button_identifier = 5003;
+static const int copy_frame_button_identifier = 5004;
+static const int delete_frame_button_identifier = 5005;
+static const int first_frame_button_identifier = 5006;
+static const int previous_frame_button_identifier = 5007;
+static const int next_frame_button_identifier = 5008;
+static const int last_frame_button_identifier = 5009;
+static const int frame_label_button_identifier = 5010;
 static int current_brush_size = 0;
 static int current_line_width = 0;
 static int current_color = 0;
@@ -1473,7 +1483,14 @@ int main() {
 		return 1;
 	}
 	int window_width = GetSystemMetrics(SM_CXSCREEN) * 2 / 3;
-	int window_height = GetSystemMetrics(SM_CYSCREEN) * 2 / 3;
+	int window_height = GetSystemMetrics(SM_CYSCREEN);
+	if (window_width > window_height) {
+		window_width = GetSystemMetrics(SM_CXSCREEN) * 2 / 3;
+		window_height = window_width * 9 / 16;
+	} else {
+		window_height = GetSystemMetrics(SM_CYSCREEN);
+		window_width = window_height * 16 / 9;
+	}
 	int button_height = window_height / 20;
 	int button_width = button_height * 4;
 	int button_gap = button_height / 4;
@@ -1587,6 +1604,7 @@ int main() {
 	int colors_x = window_width - colors_width - right_margin;
 	int right_total_height = sizes_height + group_gap + lines_height + group_gap + colors_height;
 	int right_start_y = (window_height - right_total_height) / 2;
+	right_start_y -= button_height / 2;
 	if (right_start_y < 5) {
 		right_start_y = 5;
 	}
@@ -1642,6 +1660,78 @@ int main() {
 			true
 		);
 	}
+	int bottom_margin = 5;
+	int bottom_gap = 5;
+	int anim_button_width = button_height * 5;
+	int bottom_row_y = window_height - button_height - bottom_margin;
+	int bottom_row_x = bottom_margin;
+	int right_row_width = anim_button_width * 2 + bottom_gap;
+	int right_row_x = window_width - bottom_margin - right_row_width;
+	int label_x = bottom_row_x + right_row_width + bottom_gap;
+	int label_width = right_row_x - bottom_gap - label_x;
+	int upper_row_y = bottom_row_y - button_height - bottom_gap;
+	create_button(
+		first_frame_button_identifier, L"First Frame", 0,
+		bottom_row_x, bottom_row_y,
+		anim_button_width, button_height,
+		[]() {}
+	);
+	create_button(
+		previous_frame_button_identifier, L"Previous Frame", 0,
+		bottom_row_x + anim_button_width + bottom_gap, bottom_row_y,
+		anim_button_width, button_height,
+		[]() {}
+	);
+	create_button(
+		next_frame_button_identifier, L"Next Frame", 0,
+		right_row_x, bottom_row_y,
+		anim_button_width, button_height,
+		[]() {}
+	);
+	create_button(
+		last_frame_button_identifier, L"Last Frame", 0,
+		right_row_x + anim_button_width + bottom_gap, bottom_row_y,
+		anim_button_width, button_height,
+		[]() {}
+	);
+	create_button(
+		frame_label_button_identifier, L"  Frame 1 / 1  ", 0,
+		label_x, bottom_row_y,
+		label_width, button_height,
+		[]() {}
+	);
+	set_button_enabled(frame_label_button_identifier, false);
+	create_button(
+		play_button_identifier, L"Play", 0,
+		bottom_row_x, upper_row_y,
+		anim_button_width, button_height,
+		[]() {}
+	);
+	create_button(
+		stop_button_identifier, L"Stop", 0,
+		bottom_row_x + anim_button_width + bottom_gap, upper_row_y,
+		anim_button_width, button_height,
+		[]() {}
+	);
+	int mid_button_width = (label_width - bottom_gap) / 2;
+	create_button(
+		add_frame_button_identifier, L"Add New Empty Frame", 0,
+		label_x, upper_row_y,
+		mid_button_width, button_height,
+		[]() {}
+	);
+	create_button(
+		copy_frame_button_identifier, L"Copy Current Frame As New", 0,
+		label_x + mid_button_width + bottom_gap, upper_row_y,
+		mid_button_width, button_height,
+		[]() {}
+	);
+	create_button(
+		delete_frame_button_identifier, L"Delete Current Frame", 0,
+		right_row_x, upper_row_y,
+		right_row_width, button_height,
+		[]() {}
+	);
 	create_button(
 		9999, L"About [A]", 'A',
 		about_x, top_margin,
