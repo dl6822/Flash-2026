@@ -1,8 +1,10 @@
 // developed by dl6822
 # include <array>
 # include <cstddef>
+# include <memory>
 # include <string>
 # include <utility>
+# include <vector>
 # include <functional>
 # include <unordered_map>
 # define NOMINMAX
@@ -18,11 +20,72 @@ struct button {
 	std::function<void()> function = {};
 	bool drawable = false;
 };
+struct drawable {
+	int state = 0;
+	virtual void draw() const = 0;
+	virtual ~drawable() = default;
+};
+struct brush_stroke : drawable {
+	std::vector<float> x;
+	std::vector<float> y;
+	float size = 1.0f;
+	COLORREF color = RGB(0, 0, 0);
+	void draw() const override {}
+};
+struct line_stroke : drawable {
+	float x1 = 0.0f;
+	float y1 = 0.0f;
+	float x2 = 0.0f;
+	float y2 = 0.0f;
+	float width = 1.0f;
+	COLORREF color = RGB(0, 0, 0);
+	void draw() const override {}
+};
+struct triangle_stroke : drawable {
+	float x1 = 0.0f;
+	float y1 = 0.0f;
+	float x2 = 0.0f;
+	float y2 = 0.0f;
+	float x3 = 0.0f;
+	float y3 = 0.0f;
+	float width = 1.0f;
+	COLORREF color = RGB(0, 0, 0);
+	void draw() const override {}
+};
+struct quad_stroke : drawable {
+	float x1 = 0.0f;
+	float y1 = 0.0f;
+	float x2 = 0.0f;
+	float y2 = 0.0f;
+	float width = 1.0f;
+	COLORREF color = RGB(0, 0, 0);
+	void draw() const override {}
+};
+struct polygon_stroke : drawable {
+	std::vector<float> x;
+	std::vector<float> y;
+	float width = 1.0f;
+	COLORREF color = RGB(0, 0, 0);
+	void draw() const override {}
+};
+struct frame {
+	std::vector<std::unique_ptr<drawable>> drawables = {};
+	int current_step = -1;
+};
 static const wchar_t *window_class_name = L"Flash Window Class";
 static const wchar_t *window_title = L"Flash 2026";
 static std::unordered_map<int, button> buttons = {};
+static std::vector<frame> frames(1);
 static const std::array<const wchar_t *, 6> tool_names = {
 	L"Brush", L"Line", L"Triangle", L"Quad", L"Polygon", L"Eraser"
+};
+static const std::array<const wchar_t *, 6> tool_hints = {
+	L"Brush Tool: click and drag to paint.",
+	L"Line Tool: click two points.",
+	L"Triangle Tool: click three points.",
+	L"Quad Tool: click two opposite corners.",
+	L"Polygon Tool: click points, right-click to finish.",
+	L"Eraser Tool: click and drag to clear."
 };
 static const std::array<int, 6> tool_button_identifiers = {
 	1001, 1002, 1003, 1004, 1005, 1006
@@ -62,6 +125,9 @@ static const std::array<int, 24> color_button_identifiers = {
 	3013, 3014, 3015, 3016, 3017, 3018,
 	3019, 3020, 3021, 3022, 3023, 3024
 };
+static const int undo_button_identifier = 4001;
+static const int redo_button_identifier = 4002;
+static const int hint_button_identifier = 4003;
 static int current_brush_size = 0;
 static int current_line_width = 0;
 static int current_color = 0;
@@ -91,6 +157,7 @@ static LRESULT CALLBACK procedure(
 				bool selected_button = false;
 				int color_index = -1;
 				COLORREF fill_color = GetSysColor(COLOR_BTNFACE);
+				bool disabled = (draw_item->itemState & ODS_DISABLED) != 0;
 				for (std::size_t index = 0;
 					index < tool_button_identifiers.size(); index += 1) {
 					if (tool_button_identifiers[index] == identifier) {
@@ -152,10 +219,13 @@ static LRESULT CALLBACK procedure(
 						SelectObject(draw_item->hDC, old_font);
 					}
 				} else {
-					COLORREF background = selected_button ?
+					COLORREF background = selected_button && !disabled ?
 						RGB(235, 90, 90) : GetSysColor(COLOR_BTNFACE);
-					COLORREF text_color = selected_button ?
+					COLORREF text_color = selected_button && !disabled ?
 						RGB(255, 255, 255) : GetSysColor(COLOR_BTNTEXT);
+					if (disabled) {
+						text_color = GetSysColor(COLOR_GRAYTEXT);
+					}
 					HBRUSH brush = CreateSolidBrush(background);
 					FillRect(draw_item->hDC, &draw_item->rcItem, brush);
 					DeleteObject(brush);
@@ -316,6 +386,15 @@ static void update_button_text(
 		InvalidateRect(iterator->second.handle, nullptr, TRUE);
 	}
 }
+static void set_button_enabled(int identifier, bool enabled) {
+	std::unordered_map<int, button>::iterator iterator = (
+		buttons.find(identifier)
+	);
+	if (iterator != buttons.end()) {
+		EnableWindow(iterator->second.handle, enabled ? TRUE : FALSE);
+		InvalidateRect(iterator->second.handle, nullptr, TRUE);
+	}
+}
 static std::wstring format_tool_button_text(int index) {
 	std::wstring text = tool_names[static_cast<std::size_t>(index)];
 	text += L" [";
@@ -361,6 +440,12 @@ static void update_color_buttons() {
 		);
 	}
 }
+static void update_tool_hint() {
+	update_button_text(
+		hint_button_identifier,
+		tool_hints[static_cast<std::size_t>(current_tool)]
+	);
+}
 static void set_current_tool(int index) {
 	if (index < 0 || index >= static_cast<int>(tool_button_identifiers.size())) {
 		return;
@@ -370,6 +455,7 @@ static void set_current_tool(int index) {
 	}
 	current_tool = index;
 	update_tool_buttons();
+	update_tool_hint();
 }
 static void set_current_brush_size(int index) {
 	if (index < 0 || index >= static_cast<int>(brush_size_button_identifiers.size())) {
@@ -556,6 +642,41 @@ int main() {
 	if (tools_start_y < 5) {
 		tools_start_y = 5;
 	}
+	int top_margin = 5;
+	int top_gap = 5;
+	int undo_x = top_margin;
+	int redo_x = undo_x + button_width + top_gap;
+	int about_x = window_width - button_width - top_margin;
+	int hint_x = redo_x + button_width + top_gap;
+	int hint_width = about_x - top_gap - hint_x;
+	if (hint_width < button_width) {
+		hint_width = button_width;
+	}
+	create_button(
+		undo_button_identifier, L"Undo [Z]", 'Z',
+		undo_x, top_margin,
+		button_width, button_height,
+		[]() {},
+		true
+	);
+	create_button(
+		redo_button_identifier, L"Redo [Y]", 'Y',
+		redo_x, top_margin,
+		button_width, button_height,
+		[]() {},
+		true
+	);
+	create_button(
+		hint_button_identifier,
+		tool_hints[static_cast<std::size_t>(current_tool)],
+		0,
+		hint_x, top_margin,
+		hint_width, button_height,
+		[]() {}
+	);
+	set_button_enabled(undo_button_identifier, false);
+	set_button_enabled(redo_button_identifier, false);
+	set_button_enabled(hint_button_identifier, false);
 	int tools_x = 10;
 	for (std::size_t index = 0;
 		index < tool_button_identifiers.size(); index += 1) {
@@ -594,15 +715,14 @@ int main() {
 	int line_x = sizes_x;
 	int colors_width = color_columns * color_cell + (color_columns - 1) * color_gap;
 	int colors_x = window_width - colors_width - right_margin;
-	int colors_start_y = window_height - (button_height * 2) - colors_height;
-	int lines_start_y = colors_start_y - group_gap - lines_height;
-	int sizes_start_y = lines_start_y - group_gap - sizes_height;
-	if (sizes_start_y < 5) {
-		int delta = 5 - sizes_start_y;
-		sizes_start_y += delta;
-		lines_start_y += delta;
-		colors_start_y += delta;
+	int right_total_height = sizes_height + group_gap + lines_height + group_gap + colors_height;
+	int right_start_y = (window_height - right_total_height) / 2;
+	if (right_start_y < 5) {
+		right_start_y = 5;
 	}
+	int sizes_start_y = right_start_y;
+	int lines_start_y = sizes_start_y + sizes_height + group_gap;
+	int colors_start_y = lines_start_y + lines_height + group_gap;
 	for (std::size_t index = 0;
 		index < brush_size_button_identifiers.size(); index += 1) {
 		int y = sizes_start_y + static_cast<int>(index) * (button_height + button_gap);
@@ -654,7 +774,7 @@ int main() {
 	}
 	create_button(
 		9999, L"About [A]", 'A',
-		window_width - button_width - 5, 5,
+		about_x, top_margin,
 		button_width, button_height,
 		[]() {
 			show_message_box(
